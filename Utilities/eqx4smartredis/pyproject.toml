@@ -1,0 +1,26 @@
+[project]
+name = "eqx_io"
+version = "0.1.1"
+description = "Equinox model serialization and SmartRedis I/O"
+license = { text = "MIT" }
+
+authors = [
+    { name = "Hanseul Kang", email = "hanseul.kang@aalto.fi" }
+]
+
+maintainers = [
+    { name = "Hanseul Kang", email = "hanseul.kang@aalto.fi" }
+]
+
+keywords = ["jax", "equinox", "smartsim", "smartredis", "serialization"]
+
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: POSIX :: Linux",
+    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Science/Research",
+]
+
+[project.urls]
+Repository = "https://github.com/boss507104/SmartSim4CSC"

@@ -1,0 +1,6 @@
+eqx_io.py
+pyproject.toml
+eqx_io.egg-info/PKG-INFO
+eqx_io.egg-info/SOURCES.txt
+eqx_io.egg-info/dependency_links.txt
+eqx_io.egg-info/top_level.txt
