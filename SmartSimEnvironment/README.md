@@ -12,7 +12,7 @@ Instead of deploying traditional conda or pip environments, we leverage **Tykky*
 
 ### Why Tykky?
 
-* **Import Performance** — Library initialization times drop from several minutes down to seconds.
+* **Import Performance** — Library initialisation times drop from several minutes down to seconds.
 * **Reproducibility** — The entire execution stack remains frozen within a single, immutable file image.
 * **Startup Latency** — Immediate execution startup proves critical when running high-volume, short MPI jobs.
 * **Isolation** — The complete Python dependency stack remains strictly separated from cluster host system modules.
@@ -483,3 +483,23 @@ Group multiple python dependencies inside a single update script to reduce runti
 * **Sluggish Updates** — Consolidate scattered pip invocations inside a singular update file script layer.
 * **Compiler Linkage Faults** — Verify host compiler environments explicitly using `module load gcc/13.1.0 cmake/3.28.6`.
 * **Incompatible Pointer Exceptions** — Ensure strict compiler masking flags (`-Wno-incompatible-pointer-types`) are set during step 1.
+
+
+## SmartSim Deployment Track (Co-Processing Ecosystem)
+
+This module builds an isolated container architecture optimised for coupled multi-physics simulations, specifically interfacing parallel CFD solvers (e.g., OpenFOAM) with machine learning inference backends.
+
+> [!NOTE]
+> This installer sets up the core Python environment running **SmartSim 0.8.0** and **SmartRedis 0.6.1** under Python 3.11, adhering strictly to the required `numpy < 2.0.0` constraints.
+
+### Production Blueprints & Advanced Tutorials
+
+While this folder provides the setup files required to compile and containerise the environment via Tykky, the complete reference architecture, SLURM templates, and machine learning graph injection models are maintained in a dedicated validation repository.
+
+For production-grade deployment strategies, please consult:
+🔗 **[SmartSim4CSC Reference Repository](https://github.com/boss507104/SmartSim4CSC)**
+
+#### Key Features Described in the Reference Repository:
+* **HPC Topology Optimisation:** Detailed blueprints for executing the Orchestrator within local node boundaries (utilising node-local `nvme` scratch space) or scaling across distributed **Mahti** compute nodes via high-speed interconnects.
+* **Physics-Informed Deep Learning:** Practical workflows demonstrating how to trace and serialise **JAX + Equinox** models into the immutable ONNX format, followed by real-time parallel graph submission and evaluation inside running OpenFOAM solver steps.
+* **SLURM Batch Manifests:** Production-ready `sbatch` profiles tailored for the CSC environment, minimising data-transfer latency between numerical grids and the Redis in-memory database.
