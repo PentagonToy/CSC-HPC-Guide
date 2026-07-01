@@ -377,6 +377,8 @@ cat <<EOF > $PYTHON_ROOT/update_tools.sh
 #!/bin/bash
 set -e
 
+pip install --no-cache-dir xxx
+
 echo "psutil" >> $PYTHON_ROOT/requirements.in
 
 pip-compile --allow-unsafe --reuse-hashes $PYTHON_ROOT/requirements.in
