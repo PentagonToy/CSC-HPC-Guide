@@ -196,6 +196,7 @@ pint
 ruptures
 sympy
 tensorly
+einops
 
 # --- Custom Utilities ---
 DataGraph @ git+https://github.com/boss507104/DataGraph.git#subdirectory=DataGraph
