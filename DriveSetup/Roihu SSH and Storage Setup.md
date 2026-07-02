@@ -206,13 +206,18 @@ Add the following functions:
 ```bash
 # Mount Roihu project storage
 mount-roihu() {
+    local user
+    user="$(whoami)"
+
     csc-ssh-keys || return 1
     ssh-add ~/.ssh/id_ed25519 || return 1
-    mkdir -p /Users/kangh3/ROIHU
-    mkdir -p /Users/kangh3/Rclone
+
+    mkdir -p "/Users/${user}/ROIHU"
+    mkdir -p "/Users/${user}/Rclone"
+
     rclone mount \
         Roihu:/scratch/project_2015384/Hanseul \
-        /Users/kangh3/ROIHU \
+        "/Users/${user}/ROIHU" \
         --vfs-cache-mode full \
         --vfs-cache-max-size 10G \
         --vfs-read-chunk-size 32M \
@@ -224,16 +229,19 @@ mount-roihu() {
         --dir-cache-time 5m \
         --tpslimit 10 \
         --log-level INFO \
-        --log-file /Users/kangh3/Rclone/rclone-roihu.log \
+        --log-file "/Users/${user}/Rclone/rclone-roihu.log" \
         --daemon
 }
 
 # Unmount Roihu project storage
 unmount-roihu() {
+    local user
+    user="$(whoami)"
+
     pkill -SIGTERM -f "rclone mount.*Roihu:" 2>/dev/null
     sleep 2
-    diskutil unmount force /Users/kangh3/ROIHU 2>/dev/null || \
-        umount -f /Users/kangh3/ROIHU 2>/dev/null
+    diskutil unmount force "/Users/${user}/ROIHU" 2>/dev/null || \
+        umount -f "/Users/${user}/ROIHU" 2>/dev/null
 }
 ```
 
