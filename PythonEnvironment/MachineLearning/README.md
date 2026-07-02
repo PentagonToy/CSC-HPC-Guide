@@ -12,7 +12,7 @@ Instead of deploying traditional conda or pip environments, we leverage **Tykky*
 
 ### Why Tykky?
 
-* **Import Performance** — Library initialization times drop from several minutes down to seconds.
+* **Import Performance** — Library initialisation times drop from several minutes to seconds.
 * **Reproducibility** — The entire execution stack remains frozen within a single, immutable file image.
 * **Startup Latency** — Immediate execution startup proves critical when running high-volume, short MPI jobs.
 * **Isolation** — The complete Python dependency stack remains strictly separated from cluster host system modules.
@@ -44,8 +44,6 @@ rm -rf "$ENV_PREFIX"
 rm -rf "$TMP_BUILD_DIR"
 mkdir -p "$PYTHON_ROOT/envs" "$TMP_BUILD_DIR"
 echo "Configuration loaded for $CSC_PROJECT."
-
-
 ```
 
 **Directory Structure**
@@ -59,8 +57,6 @@ echo "Configuration loaded for $CSC_PROJECT."
             └── Python/                     # $PYTHON_ROOT
                 └── envs/
                     └── $ENV_NICKNAME-3.12/  # $ENV_PREFIX
-
-
 ```
 
 > [!TIP]
@@ -91,8 +87,6 @@ Navigate to your working directory and generate the initial recipe layout:
 ```bash
 cd $PYTHON_ROOT
 nano -m base4ML.yml
-
-
 ```
 
 **Insert the following block into `base4ML.yml**`
@@ -109,16 +103,12 @@ dependencies:
   - cmake
   - make
   - ninja
-
-
 ```
 
 #### Heavy-Lifting Post-Installation Script
 
 ```bash
 nano -m extra4ML.sh
-
-
 ```
 
 **Insert the following block into `extra4ML.sh**`
@@ -241,14 +231,10 @@ IN
 
 # Direct dependency installation bypassing metadata file multiplication
 python -m pip install --no-cache-dir -r requirements.in
-
-
 ```
 
 ```bash
 chmod +x extra4ML.sh
-
-
 ```
 
 ### 2. Build Tykky Container
@@ -275,15 +261,13 @@ conda-containerize new \
     --prefix $ENV_PREFIX \
     --post-install $PYTHON_ROOT/extra4ML.sh \
     $PYTHON_ROOT/base4ML.yml
-
-
 ```
 
 ---
 
 ## Environment Activation / Loader
 
-Save the following initialization template to your scratch workspace utility path at `$BASE_SCRATCH/Python4ML.sh`.
+Save the following initialisation template to your scratch workspace utility path at `$BASE_SCRATCH/Python4ML.sh`.
 
 ```bash
 cat <<EOF > $BASE_SCRATCH/Python4ML.sh
@@ -298,14 +282,10 @@ export PATH="\$ENV_PREFIX/bin:\$PATH"
 # JAX tuning
 export JAX_PLATFORMS="gpu"
 EOF
-
-
 ```
 
 ```bash
 chmod +x $BASE_SCRATCH/Python4ML.sh
-
-
 ```
 
 Load your runtime stack during production job preparation steps: `source $BASE_SCRATCH/Python4ML.sh`
@@ -335,14 +315,10 @@ cat <<EOF > ~/.local/share/jupyter/kernels/$ENV_NICKNAME-ml/kernel.json
  }
 }
 EOF
-
-
 ```
 
 ```bash
 echo "Jupyter kernel '$ENV_NICKNAME' has been registered."
-
-
 ```
 
 **Verify Registered Runtimes**
@@ -354,20 +330,16 @@ jupyter kernelspec list
 
 # Erase deprecated entries if required
 jupyter kernelspec uninstall -f <kernel_name>
-
-
 ```
 
 ---
 
 ## Validation
 
-Verify engine compatibility directly from your compute terminal:
+Verify engine compatibility directly from your computer terminal:
 
 ```bash
 source $BASE_SCRATCH/Python4ML.sh
-
-
 ```
 
 ```bash
@@ -381,8 +353,6 @@ print(f'Equinox:    {eqx.__version__}')
 print(f'jax2onnx:   {version(\"jax2onnx\")}')
 print(f'NumPy:      {np.__version__}')
 "
-
-
 ```
 
 ---
@@ -400,8 +370,6 @@ pip install --no-cache-dir xxx
 echo "psutil" >> $PYTHON_ROOT/requirements.in
 pip install --no-cache-dir -r $PYTHON_ROOT/requirements.in
 EOF
-
-
 ```
 
 ```bash
@@ -413,11 +381,9 @@ export CW_BUILD_TMPDIR=$TMP_BUILD_DIR
 conda-containerize update \
     --post-install $PYTHON_ROOT/update_tools.sh \
     $ENV_PREFIX
-
-
 ```
 
-Group multiple python dependencies inside a single update script to reduce runtime repackaging overhead costs.
+Group multiple Python dependencies inside a single update script to reduce runtime repackaging overhead costs.
 
 ---
 
