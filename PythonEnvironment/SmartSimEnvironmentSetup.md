@@ -132,7 +132,8 @@ export TMPDIR="$CW_BUILD_TMPDIR"
 export PIP_CACHE_DIR="$CW_BUILD_TMPDIR/.pip_cache"
 mkdir -p "$PIP_CACHE_DIR"
 
-pip install --no-cache-dir pip-tools setuptools
+# Install uv for fast, reliable dependency resolution
+pip install --no-cache-dir uv
 
 cat <<'IN' > requirements.in
 # --- Core Math & Data ---
@@ -155,11 +156,12 @@ pyfoam
 kagglehub
 
 # --- JAX Ecosystem ---
+# uv will automatically resolve compatible versions for these based on jax constraint
 jax[cuda12]==0.6.2
-diffrax==0.6.0
-equinox==0.11.4
-jaxtyping==0.2.28
-jax2onnx==0.1.1
+diffrax
+equinox
+jaxtyping
+jax2onnx
 jaxopt
 einops
 lineax
@@ -245,8 +247,9 @@ tabulate
 typing-extensions
 IN
 
-python -m piptools compile --allow-unsafe requirements.in
-python -m pip install --no-cache-dir -r requirements.txt
+# Use uv to resolve dependencies and compile requirements
+uv pip compile requirements.in -o requirements.txt
+uv pip install -r requirements.txt
 
 # Fetch and patch SmartSim client source inside scratch space to fully eliminate file footprint overhead
 cd "$CW_BUILD_TMPDIR"
@@ -284,7 +287,6 @@ env CFLAGS="-Wno-incompatible-pointer-types" \
 
 # Clear residual file footprints immediately
 rm -rf "$PIP_CACHE_DIR"
-
 ```
 
 ```bash
