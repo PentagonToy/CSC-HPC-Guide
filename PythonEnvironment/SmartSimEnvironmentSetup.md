@@ -133,6 +133,9 @@ export PIP_CACHE_DIR="$CW_BUILD_TMPDIR/.pip_cache"
 export UV_CACHE_DIR="$CW_BUILD_TMPDIR/.uv_cache"
 mkdir -p "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
 
+# Keep generated requirement files inside scratch
+cd "$CW_BUILD_TMPDIR"
+
 # Install uv for fast, reliable dependency resolution
 pip install --no-cache-dir uv
 
@@ -252,8 +255,7 @@ IN
 uv pip compile requirements.in -o requirements.txt
 uv pip install -r requirements.txt
 
-# Fetch and patch SmartSim client source inside scratch space to fully eliminate file footprint overhead
-cd "$CW_BUILD_TMPDIR"
+# Fetch and patch SmartRedis client source inside scratch space
 rm -rf SmartRedis
 git clone https://github.com/boss507104/SmartRedis.git
 cd SmartRedis
@@ -286,7 +288,7 @@ env CFLAGS="-Wno-incompatible-pointer-types" \
     USE_SYSTEMD=no \
     smart build --device cpu --skip-torch --skip-tensorflow
 
-# Clear residual file footprints immediately
+# Clear residual cache footprints immediately
 rm -rf "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
 ```
 
