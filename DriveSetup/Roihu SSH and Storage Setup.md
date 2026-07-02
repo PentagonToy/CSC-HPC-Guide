@@ -183,7 +183,7 @@ Host roihu-cpu-interactive
     ServerAliveCountMax 3
     StrictHostKeyChecking no
     UserKnownHostsFile /dev/null
-    ProxyCommand ssh roihu-cpu "srun --account=project_2015384 --partition=interactive --cpus-per-task=32 --mem=64G --time=09:00:00 --unbuffered nc localhost 22"
+    ProxyCommand ssh roihu-cpu "srun --account=project_2015384 --partition=interactive --cpus-per-task=32 --mem=62G --time=09:00:00 --unbuffered nc localhost 22"
 
 Host roihu-gpu-interactive
     HostName roihu-gpu.csc.fi
