@@ -26,6 +26,7 @@ This configuration uses **uv** inside the Tykky build environment to resolve and
 * **Simple Workflow** — Packages are installed directly from `requirements.in`.
 * **Installed-State Record** — The final installed package versions are recorded in `requirements.txt`.
 * **Post-Installation Validation** — `uv pip check` verifies the installed dependency relationships.
+* **Explicit Copy Mode** — `--link-mode=copy` avoids unsupported hardlink operations between the uv cache and the temporary Tykky environment.
 
 The direct package specifications in `requirements.in` contain the SmartSim-specific compatibility constraints:
 
@@ -34,6 +35,7 @@ Python       3.11
 SmartSim     0.8.0
 SmartRedis   0.6.1-compatible source
 JAX          0.6.2
+ONNX         1.17.0
 NumPy        < 2.0.0
 protobuf     3.20.3
 CMake        < 3.30.0
@@ -62,6 +64,8 @@ SmartRedis Python client
 SmartRedis native library
     Built outside Tykky for direct linkage with OpenFOAM, C++, and Fortran solvers.
 ```
+
+The SmartSim database build installs its own ONNX-related Python dependencies. The installation script therefore reapplies `requirements.in` after `smart build` to restore the required `onnx==1.17.0` version before running the final dependency check.
 
 This configuration forms part of the [CSC Environment Helpers Framework](https://github.com/boss507104/CSCEnvironmentHelpers). Production examples for coupling SmartSim, SmartRedis, OpenFOAM, JAX, and ONNX are maintained in the [SmartSim4CSC repository](https://github.com/boss507104/SmartSim4CSC).
 
@@ -152,6 +156,7 @@ The resulting base path is:
 | **SmartSim** | 0.8.0 | Orchestration framework and database lifecycle management |
 | **SmartRedis** | 0.6.1-compatible source | Python client and native C++/Fortran client library |
 | **JAX** | 0.6.2 with CUDA 12 support | Array programming and automatic differentiation |
+| **ONNX** | 1.17.0 | Compatible with `jax2onnx` and the pinned protobuf stack |
 | **NumPy** | `< 2.0.0` | Compatibility constraint required by the SmartSim stack |
 | **protobuf** | 3.20.3 | Compatibility layer used by SmartSim and ONNX tooling |
 | **CMake** | `< 3.30.0` | SmartRedis and SmartSim native build compatibility |
@@ -233,7 +238,7 @@ jax2onnx
 jaxopt
 einops
 lineax
-onnx
+onnx==1.17.0
 optax
 optimistix
 sympy2jax
@@ -346,8 +351,9 @@ mkdir -p "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
 # Install uv inside the active Python 3.11 Tykky build environment
 python -m pip install --no-cache-dir uv
 
-# Resolve and install the direct dependencies and their transitive dependencies
+# Resolve and install the requested Python dependency set
 uv pip install \
+    --link-mode=copy \
     --requirements "$PYTHON_ROOT/requirements.in"
 
 # Clone and install the patched SmartRedis Python client
@@ -398,7 +404,12 @@ env \
         --skip-torch \
         --skip-tensorflow
 
-# Verify the installed Python dependency relationships
+# Restore packages modified by the SmartSim database build
+uv pip install \
+    --link-mode=copy \
+    --requirements "$PYTHON_ROOT/requirements.in"
+
+# Verify the final installed dependency relationships
 uv pip check
 
 # Record the installed package versions
@@ -412,6 +423,14 @@ python -m pip list \
 rm -rf "$CW_BUILD_TMPDIR/SmartRedis"
 rm -rf "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
 ```
+
+The second `uv pip install` restores packages changed by `smart build`. In particular, the SmartSim ONNX backend may install `onnx==1.15.0`, while `jax2onnx` requires:
+
+```text
+onnx>=1.17.0,<1.19.0
+```
+
+The explicit `onnx==1.17.0` constraint restores a version compatible with both `jax2onnx` and the pinned `protobuf==3.20.3` stack.
 
 The locally patched SmartRedis Python client is deliberately excluded from `requirements.txt`. It is installed separately from the SmartRedis source repository during every build.
 
@@ -486,9 +505,10 @@ During the build, Tykky performs these operations:
 4. Resolves and installs the packages listed in requirements.in.
 5. Installs the patched SmartRedis Python client.
 6. Builds the SmartSim database dependencies.
-7. Verifies the installed Python dependency relationships.
-8. Records the installed package versions in requirements.txt.
-9. Packages the completed environment into the Tykky image.
+7. Restores the package versions specified in requirements.in.
+8. Verifies the final installed dependency relationships.
+9. Records the installed package versions in requirements.txt.
+10. Packages the completed environment into the Tykky image.
 ```
 
 After the build completes:
@@ -502,8 +522,14 @@ Inspect the critical installed versions:
 
 ```bash
 grep -E \
-    '^(jax|numpy|protobuf|smartsim)==' \
+    '^(jax|numpy|onnx|protobuf|smartsim)==' \
     "$PYTHON_ROOT/requirements.txt"
+```
+
+The expected ONNX version is:
+
+```text
+onnx==1.17.0
 ```
 
 ---
@@ -741,6 +767,7 @@ print(f'SmartRedis:  {version(\"smartredis\")}')
 print(f'JAX:         {jax.__version__}')
 print(f'Equinox:     {eqx.__version__}')
 print(f'jax2onnx:    {version(\"jax2onnx\")}')
+print(f'ONNX:        {version(\"onnx\")}')
 print(f'NumPy:       {np.__version__}')
 print(f'protobuf:    {version(\"protobuf\")}')
 print(f'Devices:     {jax.devices()}')
@@ -853,6 +880,7 @@ Keep the following entries unless the complete stack is deliberately revalidated
 ```text
 numpy<2.0.0
 jax[cuda12]==0.6.2
+onnx==1.17.0
 protobuf==3.20.3
 smartsim==0.8.0
 ```
@@ -868,10 +896,11 @@ cmake<3.30.0
 
 A previously generated `requirements.txt` records the package versions installed in that environment.
 
-To reproduce those versions, temporarily replace this command in `extra4SmartSim.sh`:
+To reproduce those versions, temporarily replace both dependency installation commands in `extra4SmartSim.sh`:
 
 ```bash
 uv pip install \
+    --link-mode=copy \
     --requirements "$PYTHON_ROOT/requirements.in"
 ```
 
@@ -879,6 +908,7 @@ with:
 
 ```bash
 uv pip install \
+    --link-mode=copy \
     --requirements "$PYTHON_ROOT/requirements.txt"
 ```
 
@@ -931,8 +961,9 @@ mkdir -p "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
 # Install uv inside the active Tykky update environment
 python -m pip install --no-cache-dir uv
 
-# Resolve and install the current dependency set
+# Resolve and install the requested dependency set
 uv pip install \
+    --link-mode=copy \
     --requirements "$PYTHON_ROOT/requirements.in"
 
 # Reinstall the patched SmartRedis Python client
@@ -979,7 +1010,12 @@ env \
         --skip-torch \
         --skip-tensorflow
 
-# Verify the installed dependency relationships
+# Restore packages modified by the SmartSim database build
+uv pip install \
+    --link-mode=copy \
+    --requirements "$PYTHON_ROOT/requirements.in"
+
+# Verify the final installed dependency relationships
 uv pip check
 
 # Record the updated installed package versions
@@ -1113,7 +1149,7 @@ conda-containerize new \
     "$PYTHON_ROOT/base4SmartSim.yml"
 ```
 
-The rebuild resolves the dependency set from `requirements.in` and records the installed versions in `requirements.txt`.
+The rebuild resolves the dependency set from `requirements.in`, restores packages modified by `smart build`, validates the final environment, and records the installed versions in `requirements.txt`.
 
 ### 8. Rebuild the SmartRedis Native Library
 
@@ -1259,7 +1295,7 @@ rm -rf "$SMARTREDIS_DIR"
 
 ### `requirements.txt` Is Missing
 
-The file is generated after the Python packages, SmartRedis Python client, and SmartSim database dependencies have been installed successfully.
+The file is generated only after the Python packages, SmartRedis Python client, SmartSim database dependencies, dependency restoration, and final compatibility check have completed successfully.
 
 Run a complete Tykky build:
 
@@ -1289,11 +1325,55 @@ Preserve these compatibility constraints:
 ```text
 numpy<2.0.0
 jax[cuda12]==0.6.2
+onnx==1.17.0
 protobuf==3.20.3
 smartsim==0.8.0
 ```
 
 Repeat the build after correcting the conflicting dependency.
+
+### `jax2onnx` Reports an Incompatible ONNX Version
+
+The incompatible state appears as:
+
+```text
+jax2onnx requires onnx>=1.17.0,<1.19.0
+but onnx 1.15.0 is installed
+```
+
+The SmartSim database build may install `onnx==1.15.0` for its ONNX Runtime backend.
+
+Keep this constraint in `requirements.in`:
+
+```text
+onnx==1.17.0
+```
+
+Ensure that `extra4SmartSim.sh` reapplies the dependency file after `smart build`:
+
+```bash
+uv pip install \
+    --link-mode=copy \
+    --requirements "$PYTHON_ROOT/requirements.in"
+
+uv pip check
+```
+
+Do not remove the final `uv pip check`. It confirms that the restored environment is internally consistent.
+
+### uv Reports a Hardlink Warning
+
+The uv cache and temporary Tykky Python environment reside on different filesystems.
+
+Use explicit copy mode:
+
+```bash
+uv pip install \
+    --link-mode=copy \
+    --requirements "$PYTHON_ROOT/requirements.in"
+```
+
+This avoids the failed hardlink attempt and suppresses the fallback warning.
 
 ### Package Downloads Are Slow
 
@@ -1349,6 +1429,16 @@ smart build \
     --device cpu \
     --skip-torch \
     --skip-tensorflow
+```
+
+After rebuilding the database dependencies, restore the requested Python package set:
+
+```bash
+uv pip install \
+    --link-mode=copy \
+    --requirements "$PYTHON_ROOT/requirements.in"
+
+uv pip check
 ```
 
 ### SmartRedis Native Library Cannot Be Found
@@ -1413,6 +1503,16 @@ env \
         --skip-tensorflow
 ```
 
+Restore the Python dependency set afterwards:
+
+```bash
+uv pip install \
+    --link-mode=copy \
+    --requirements "$PYTHON_ROOT/requirements.in"
+
+uv pip check
+```
+
 ### Import Errors After an Update
 
 Verify the installed dependency relationships:
@@ -1471,7 +1571,12 @@ The complete production architecture, Slurm templates, database placement strate
 * Use a previously generated `requirements.txt` when the same installed package versions must be reconstructed.
 * The patched SmartRedis Python client is installed separately from its source repository.
 * The SmartRedis Python client is excluded from `requirements.txt`.
-* Preserve the SmartSim, JAX, NumPy, protobuf, Python, and CMake compatibility constraints.
+* Preserve the SmartSim, JAX, ONNX, NumPy, protobuf, Python, and CMake compatibility constraints.
+* `onnx==1.17.0` satisfies the `jax2onnx` requirement while remaining compatible with the pinned protobuf stack.
+* The SmartSim database build may temporarily install `onnx==1.15.0`.
+* The dependency set must therefore be reapplied after `smart build`.
+* The final `uv pip check` must run only after the dependency restoration step.
+* Every `uv pip install` uses `--link-mode=copy` because the uv cache and Tykky target environment reside on different filesystems.
 * The SmartRedis Python client and SmartRedis native libraries serve different purposes.
 * The native SmartRedis library must be rebuilt when its compiler, source, target system, or ABI changes.
 * `UV_CONCURRENT_DOWNLOADS=4` limits simultaneous external package downloads.
