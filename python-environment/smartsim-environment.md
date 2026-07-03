@@ -1,6 +1,6 @@
 # SmartSim Environment Configuration
 
-Last updated: 2 July 2026
+Last updated: 3 July 2026
 
 ---
 
@@ -19,30 +19,51 @@ Instead of deploying traditional Conda or pip environments directly on the paral
 
 ### Why uv?
 
-This configuration uses **uv** to resolve and install Python packages during the Tykky build.
+This configuration uses **uv** inside the Tykky build environment to resolve and install Python packages.
 
-* **Fast Resolution** — uv resolves large scientific Python dependency trees substantially faster than conventional pip workflows.
+* **Fast Resolution** — uv resolves large scientific Python dependency trees efficiently.
 * **Compatible Dependency Selection** — uv selects mutually compatible direct and transitive package versions.
-* **Compiled Requirements** — The resolved package set is recorded in `requirements.txt`.
-* **Consistent Workflow** — The same resolver handles dependency compilation and installation.
+* **Simple Workflow** — Packages are installed directly from `requirements.in`.
+* **Installed-State Record** — The final installed package versions are recorded in `requirements.txt`.
+* **Post-Installation Validation** — `uv pip check` verifies the installed dependency relationships.
 
-Unlike the general ML environment, several packages in this SmartSim environment are intentionally constrained for compatibility:
+The direct package specifications in `requirements.in` contain the SmartSim-specific compatibility constraints:
 
 ```text
 Python       3.11
 SmartSim     0.8.0
-SmartRedis   0.6.1
+SmartRedis   0.6.1-compatible source
 JAX          0.6.2
 NumPy        < 2.0.0
 protobuf     3.20.3
 CMake        < 3.30.0
 ```
 
-> [!NOTE]
-> `requirements.in` records the requested top-level packages and compatibility constraints, while `requirements.txt` records the exact direct and transitive versions selected by uv. Rebuilding from an unchanged committed `requirements.txt` preserves the resolved Python package set, subject to platform and package availability.
+The dependency files have different roles:
 
-> [!NOTE]
-> This configuration forms part of the [CSC Environment Helpers Framework](https://github.com/boss507104/CSCEnvironmentHelpers). Production examples for coupling SmartSim, SmartRedis, OpenFOAM, JAX, and ONNX are maintained in the [SmartSim4CSC repository](https://github.com/boss507104/SmartSim4CSC).
+```text
+requirements.in
+    Human-maintained direct package specifications and compatibility constraints.
+
+requirements.txt
+    Installed package versions recorded after a successful Tykky build.
+```
+
+The `requirements.txt` file is an installed-state snapshot rather than a separately compiled lockfile.
+
+Dependency resolution and installation take place inside the Python 3.11 environment created by Tykky. No external Conda, Miniforge, Mamba, Python module, resolver environment, or virtual environment is required.
+
+The SmartRedis Python client and the SmartRedis native C++/Fortran library are built separately:
+
+```text
+SmartRedis Python client
+    Installed inside the Tykky Python environment.
+
+SmartRedis native library
+    Built outside Tykky for direct linkage with OpenFOAM, C++, and Fortran solvers.
+```
+
+This configuration forms part of the [CSC Environment Helpers Framework](https://github.com/boss507104/CSCEnvironmentHelpers). Production examples for coupling SmartSim, SmartRedis, OpenFOAM, JAX, and ONNX are maintained in the [SmartSim4CSC repository](https://github.com/boss507104/SmartSim4CSC).
 
 ---
 
@@ -94,11 +115,9 @@ The resulting base path is:
 /scratch/project_xxxxxxx/Harry/Utilities
 ```
 
-> [!NOTE]
-> `Harry` and `Dumbledore` are fictional placeholder values used in this public documentation. Replace them with your actual project directory and preferred environment name.
+`Harry` and `Dumbledore` are fictional placeholder values used in this public documentation. Replace them with your actual project directory and preferred environment name.
 
-> [!NOTE]
-> `PROJECT_USER_DIR` is not necessarily the same as your CSC login username. It identifies the directory located directly under the CSC project scratch path.
+`PROJECT_USER_DIR` is not necessarily the same as your CSC login username. It identifies the directory located directly under the CSC project scratch path.
 
 **Directory Structure**
 
@@ -108,6 +127,7 @@ The resulting base path is:
     └── $PROJECT_USER_DIR/
         └── Utilities/                             # $BASE_SCRATCH
             ├── .tykky_runtime/                    # $TMP_BUILD_DIR
+            ├── Python4SmartSim.sh
             ├── SmartRedis/                        # $SMARTREDIS_DIR
             │   ├── build/
             │   └── install/
@@ -121,32 +141,20 @@ The resulting base path is:
                     └── $ENV_NICKNAME-3.11/        # $ENV_PREFIX
 ```
 
-> [!TIP]
-> Store the configuration files, SmartRedis source tree, and temporary build data under your own `Utilities` directory on the parallel scratch filesystem.
-
 ---
 
 ## Dependency Overview
 
 | Package | Version Policy | Purpose |
 | --- | --- | --- |
-| **Python** | 3.11 | Base interpreter supplied through the Tykky Conda specification |
-| **uv** | Latest available during build | Python dependency resolution and installation |
+| **Python** | 3.11 | Base interpreter created by Tykky |
+| **uv** | Latest available during the build | Dependency resolution, installation, and validation |
 | **SmartSim** | 0.8.0 | Orchestration framework and database lifecycle management |
 | **SmartRedis** | 0.6.1-compatible source | Python client and native C++/Fortran client library |
 | **JAX** | 0.6.2 with CUDA 12 support | Array programming and automatic differentiation |
 | **NumPy** | `< 2.0.0` | Compatibility constraint required by the SmartSim stack |
 | **protobuf** | 3.20.3 | Compatibility layer used by SmartSim and ONNX tooling |
-| **CMake** | `< 3.30.0` | Native SmartRedis and SmartSim build compatibility |
-
-The environment uses two Python dependency files:
-
-```text
-requirements.in   Direct, human-maintained package specifications
-requirements.txt  Fully resolved direct and transitive package versions
-```
-
-The SmartRedis native C++ and Fortran library is built separately with CSC compiler modules because it must be linked directly by external solvers.
+| **CMake** | `< 3.30.0` | SmartRedis and SmartSim native build compatibility |
 
 ---
 
@@ -154,7 +162,7 @@ The SmartRedis native C++ and Fortran library is built separately with CSC compi
 
 ### 1. Create the Configuration Files
 
-Navigate to the Python configuration directory:
+Create the Python configuration directory:
 
 ```bash
 mkdir -p "$PYTHON_ROOT"
@@ -169,7 +177,7 @@ Create `base4SmartSim.yml`:
 nano -m base4SmartSim.yml
 ```
 
-Insert the following block:
+Insert:
 
 ```yaml
 channels:
@@ -194,7 +202,7 @@ Create `requirements.in`:
 nano -m requirements.in
 ```
 
-Insert the following block:
+Insert:
 
 ```text
 # --- Core Math & Data ---
@@ -315,13 +323,13 @@ Create `extra4SmartSim.sh`:
 nano -m extra4SmartSim.sh
 ```
 
-Insert the following block:
+Insert:
 
 ```bash
 #!/bin/bash
 set -e
 
-# Confirm that the build configuration is available
+# Confirm that the build variables are available
 : "${CW_BUILD_TMPDIR:?CW_BUILD_TMPDIR is not set}"
 : "${PYTHON_ROOT:?PYTHON_ROOT is not set}"
 
@@ -330,14 +338,17 @@ export TMPDIR="$CW_BUILD_TMPDIR"
 export PIP_CACHE_DIR="$CW_BUILD_TMPDIR/.pip_cache"
 export UV_CACHE_DIR="$CW_BUILD_TMPDIR/.uv_cache"
 
+# Limit simultaneous downloads on the CSC network
+export UV_CONCURRENT_DOWNLOADS=4
+
 mkdir -p "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
 
-# Install uv inside the active Tykky build environment
+# Install uv inside the active Python 3.11 Tykky build environment
 python -m pip install --no-cache-dir uv
 
-# Install the complete resolved Python dependency set
+# Resolve and install the direct dependencies and their transitive dependencies
 uv pip install \
-    --requirements "$PYTHON_ROOT/requirements.txt"
+    --requirements "$PYTHON_ROOT/requirements.in"
 
 # Clone and install the patched SmartRedis Python client
 rm -rf "$CW_BUILD_TMPDIR/SmartRedis"
@@ -348,11 +359,11 @@ git clone \
 
 cd "$CW_BUILD_TMPDIR/SmartRedis"
 
-# Add the missing fixed-width integer header required by newer compilers
+# Add the fixed-width integer header required by newer compilers
 grep -q '#include <cstdint>' src/cpp/tensorpack.cpp || \
     sed -i '30i #include <cstdint>' src/cpp/tensorpack.cpp
 
-# Preserve the current Tykky compiler flags
+# Preserve the Tykky compiler flags
 OLD_CFLAGS="${CFLAGS-}"
 OLD_CXXFLAGS="${CXXFLAGS-}"
 OLD_CPPFLAGS="${CPPFLAGS-}"
@@ -363,7 +374,7 @@ unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
 # Install the SmartRedis Python client
 python -m pip install --no-cache-dir .
 
-# Restore the original compiler flags
+# Restore the Tykky compiler flags
 export CFLAGS="$OLD_CFLAGS"
 export CXXFLAGS="$OLD_CXXFLAGS"
 export CPPFLAGS="$OLD_CPPFLAGS"
@@ -387,10 +398,22 @@ env \
         --skip-torch \
         --skip-tensorflow
 
+# Verify the installed Python dependency relationships
+uv pip check
+
+# Record the installed package versions
+python -m pip list \
+    --format=freeze \
+    | grep -v '^smartredis==' \
+    | sort \
+    > "$PYTHON_ROOT/requirements.txt"
+
 # Remove temporary source and package caches
 rm -rf "$CW_BUILD_TMPDIR/SmartRedis"
 rm -rf "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
 ```
+
+The locally patched SmartRedis Python client is deliberately excluded from `requirements.txt`. It is installed separately from the SmartRedis source repository during every build.
 
 Make the script executable:
 
@@ -400,99 +423,9 @@ chmod +x extra4SmartSim.sh
 
 ---
 
-## 2. Compile the Dependency Set
+## 2. Build the Tykky Container
 
-Request an interactive compute node before resolving the package set:
-
-```bash
-srun --account="$CSC_PROJECT" \
-    --partition=small \
-    --nodes=1 \
-    --ntasks=1 \
-    --cpus-per-task=16 \
-    --time=01:30:00 \
-    --pty bash
-```
-
-Load an available Conda-compatible module:
-
-```bash
-module load miniforge
-```
-
-If the CSC system does not provide `miniforge`, use the available Conda-compatible module instead.
-
-Create a temporary Python 3.11 resolver environment:
-
-```bash
-rm -rf "$TMP_BUILD_DIR/uv-resolver"
-
-conda create \
-    --prefix "$TMP_BUILD_DIR/uv-resolver" \
-    --channel conda-forge \
-    --yes \
-    python=3.11 \
-    pip
-```
-
-Activate the resolver environment:
-
-```bash
-source activate "$TMP_BUILD_DIR/uv-resolver"
-```
-
-Install uv:
-
-```bash
-python -m pip install --no-cache-dir uv
-```
-
-Compile `requirements.in` into `requirements.txt`:
-
-```bash
-uv pip compile \
-    "$PYTHON_ROOT/requirements.in" \
-    --output-file "$PYTHON_ROOT/requirements.txt" \
-    --python-version 3.11
-```
-
-Inspect the resolved file:
-
-```bash
-head -n 40 "$PYTHON_ROOT/requirements.txt"
-```
-
-Verify the critical compatibility pins:
-
-```bash
-grep -E \
-    '^(jax|numpy|protobuf|smartsim)==' \
-    "$PYTHON_ROOT/requirements.txt"
-```
-
-Deactivate the temporary resolver environment:
-
-```bash
-conda deactivate
-```
-
-Remove it when no longer required:
-
-```bash
-rm -rf "$TMP_BUILD_DIR/uv-resolver"
-```
-
-> [!NOTE]
-> Re-run this compilation step whenever you add, remove, or deliberately update packages in `requirements.in`.
-
-> [!WARNING]
-> Do not remove the SmartSim-specific constraints from `requirements.in` without first validating SmartSim, SmartRedis, ONNX, NumPy, and JAX compatibility together.
-
----
-
-## 3. Build the Tykky Container
-
-Request an interactive compute node before running the container build if you are not already inside one:
+Request an interactive compute node:
 
 ```bash
 srun --account="$CSC_PROJECT" \
@@ -503,12 +436,11 @@ srun --account="$CSC_PROJECT" \
     --time=01:30:00 \
     --pty bash
 ```
-
-If package downloads or native builds require more time, request a partition and time limit appropriate for the target CSC system.
 
 Load Tykky:
 
 ```bash
+module purge
 module load tykky
 ```
 
@@ -521,14 +453,19 @@ export CW_BUILD_TMPDIR="$TMP_BUILD_DIR"
 mkdir -p "$TMPDIR"
 ```
 
-Verify that all required source files exist:
+Confirm that the configuration files exist:
 
 ```bash
 ls -l \
     "$PYTHON_ROOT/base4SmartSim.yml" \
     "$PYTHON_ROOT/extra4SmartSim.sh" \
-    "$PYTHON_ROOT/requirements.in" \
-    "$PYTHON_ROOT/requirements.txt"
+    "$PYTHON_ROOT/requirements.in"
+```
+
+Remove an existing or incomplete environment:
+
+```bash
+rm -rf "$ENV_PREFIX"
 ```
 
 Build the container:
@@ -540,27 +477,48 @@ conda-containerize new \
     "$PYTHON_ROOT/base4SmartSim.yml"
 ```
 
-After a successful build, verify that the environment directory exists:
+During the build, Tykky performs these operations:
+
+```text
+1. Creates the Python 3.11 base environment.
+2. Runs extra4SmartSim.sh inside the environment.
+3. Installs uv.
+4. Resolves and installs the packages listed in requirements.in.
+5. Installs the patched SmartRedis Python client.
+6. Builds the SmartSim database dependencies.
+7. Verifies the installed Python dependency relationships.
+8. Records the installed package versions in requirements.txt.
+9. Packages the completed environment into the Tykky image.
+```
+
+After the build completes:
 
 ```bash
 ls -ld "$ENV_PREFIX"
+ls -lh "$PYTHON_ROOT/requirements.txt"
+```
+
+Inspect the critical installed versions:
+
+```bash
+grep -E \
+    '^(jax|numpy|protobuf|smartsim)==' \
+    "$PYTHON_ROOT/requirements.txt"
 ```
 
 ---
 
-## 4. Build the SmartRedis Native Library
+## 3. Build the SmartRedis Native Library
 
-The Python client installed inside the Tykky environment is not sufficient for OpenFOAM, Fortran, or external C++ solver linkage.
+The SmartRedis Python client installed inside the Tykky environment is not sufficient for OpenFOAM, C++, or Fortran solver linkage.
 
-Build the SmartRedis native C++ and Fortran library separately on a compute node using the cluster compiler modules.
+Build the native SmartRedis C++, C, and Fortran libraries separately on a compute node using the compiler modules available on the target CSC system.
 
 Start from a clean module environment:
 
 ```bash
 module purge
 ```
-
-Load the required compiler and build tools.
 
 Example for Roihu:
 
@@ -578,9 +536,6 @@ module load cmake/3.28.6
 module load git
 ```
 
-> [!NOTE]
-> Module versions differ between CSC systems. Use compatible GCC and CMake modules available on the target system.
-
 Clone the SmartRedis source:
 
 ```bash
@@ -595,7 +550,7 @@ git clone \
 cd "$SMARTREDIS_DIR"
 ```
 
-Apply the compiler compatibility patch only when it is not already present:
+Apply the compiler compatibility patch:
 
 ```bash
 grep -q '#include <cstdint>' src/cpp/tensorpack.cpp || \
@@ -625,7 +580,7 @@ env \
     make lib-with-fortran
 ```
 
-Verify the native library installation:
+Verify the native installation:
 
 ```bash
 find "$SMARTREDIS_DIR/install" \
@@ -644,7 +599,7 @@ ls -la "$SMARTREDIS_DIR/install/lib"
 
 ## Environment Activation / Loader
 
-Create the runtime initialisation script at `$BASE_SCRATCH/Python4SmartSim.sh`.
+Create `$BASE_SCRATCH/Python4SmartSim.sh`:
 
 ```bash
 cat <<EOF > "$BASE_SCRATCH/Python4SmartSim.sh"
@@ -653,11 +608,11 @@ cat <<EOF > "$BASE_SCRATCH/Python4SmartSim.sh"
 # Compiler runtime
 module load gcc/13.4.0
 
-# Paths
+# Environment paths
 export ENV_PREFIX="$ENV_PREFIX"
 export SMARTREDIS_DIR="$SMARTREDIS_DIR"
 
-# Tykky container executable path
+# Tykky executable path
 export PATH="\$ENV_PREFIX/bin:\$PATH"
 
 # SmartRedis native libraries
@@ -666,13 +621,12 @@ export LD_LIBRARY_PATH="\$SMARTREDIS_DIR/install/lib:\${LD_LIBRARY_PATH:-}"
 # SmartSim database startup tolerance
 export SMARTSIM_DB_FILE_PARSE_TRIALS=600
 
-# Prefer the JAX GPU backend when GPU resources are available
+# Prefer the JAX GPU backend
 export JAX_PLATFORMS="gpu"
 EOF
 ```
 
-> [!NOTE]
-> Replace `gcc/13.4.0` with the GCC module used to build SmartRedis when running on another CSC system.
+Replace `gcc/13.4.0` with the GCC module used to build SmartRedis on the target CSC system.
 
 Make the loader executable:
 
@@ -686,10 +640,9 @@ Load the environment:
 source "$BASE_SCRATCH/Python4SmartSim.sh"
 ```
 
-Verify the active Python executable:
+Confirm the Python version:
 
 ```bash
-which python
 python --version
 ```
 
@@ -699,10 +652,7 @@ Verify the SmartRedis native library path:
 echo "$LD_LIBRARY_PATH"
 ```
 
-> [!NOTE]
-> `JAX_PLATFORMS="gpu"` requires a GPU allocation and compatible CUDA driver environment. Override this variable when running CPU-only workloads.
-
-For a CPU-only session:
+For CPU-only execution:
 
 ```bash
 export JAX_PLATFORMS="cpu"
@@ -711,8 +661,6 @@ export JAX_PLATFORMS="cpu"
 ---
 
 ## VS Code Kernel Registration
-
-Register the Tykky SmartSim environment as a Jupyter kernel for remote VS Code sessions.
 
 Create the kernel directory:
 
@@ -747,14 +695,14 @@ Confirm the registration:
 echo "Jupyter kernel '$ENV_NICKNAME-smartsim' has been registered."
 ```
 
-List available kernels:
+List the available kernels:
 
 ```bash
 source "$BASE_SCRATCH/Python4SmartSim.sh"
 jupyter kernelspec list
 ```
 
-Remove an obsolete kernel when necessary:
+Remove an obsolete kernel:
 
 ```bash
 jupyter kernelspec uninstall -f <kernel_name>
@@ -770,7 +718,7 @@ Load the environment:
 source "$BASE_SCRATCH/Python4SmartSim.sh"
 ```
 
-For CPU-only validation:
+Use the CPU backend when validating on a CPU node:
 
 ```bash
 export JAX_PLATFORMS="cpu"
@@ -800,7 +748,7 @@ print(f'DB Exec:     {CONFIG.database_exe}')
 "
 ```
 
-Verify that important scientific packages import correctly:
+Verify the scientific and SmartSim packages:
 
 ```bash
 python -c "
@@ -820,21 +768,27 @@ print('Core SmartSim, ML, and scientific packages imported successfully.')
 "
 ```
 
+Verify the installed dependency relationships:
+
+```bash
+uv pip check
+```
+
 Run the SmartSim integrity diagnostic:
 
 ```bash
 smart validate --device cpu
 ```
 
-Missing PyTorch or TensorFlow backends are expected because the database build deliberately excludes them.
+Missing PyTorch or TensorFlow backends are expected because the SmartSim database build deliberately excludes them.
 
-Inspect the installed package set:
+Inspect the installed package versions:
 
 ```bash
-python -m pip freeze
+python -m pip list --format=freeze
 ```
 
-Compare it with the compiled requirements:
+Inspect the recorded package snapshot:
 
 ```bash
 head -n 40 "$PYTHON_ROOT/requirements.txt"
@@ -856,82 +810,13 @@ The dependency files serve different purposes:
 
 ```text
 requirements.in
-    Human-maintained list of direct dependencies and compatibility constraints.
+    Human-maintained direct dependencies and SmartSim compatibility constraints.
 
 requirements.txt
-    uv-generated list containing exact direct and transitive versions.
+    Installed package versions recorded after a successful build.
 ```
 
-### Add or Remove a Package
-
-Edit `requirements.in`:
-
-```bash
-nano -m "$PYTHON_ROOT/requirements.in"
-```
-
-Recompile the dependency set:
-
-```bash
-uv pip compile \
-    "$PYTHON_ROOT/requirements.in" \
-    --output-file "$PYTHON_ROOT/requirements.txt" \
-    --python-version 3.11
-```
-
-Inspect the changes:
-
-```bash
-git diff -- \
-    "$PYTHON_ROOT/requirements.in" \
-    "$PYTHON_ROOT/requirements.txt"
-```
-
-Verify that the SmartSim compatibility pins remain intact:
-
-```bash
-grep -E \
-    '^(jax|numpy|protobuf|smartsim)==' \
-    "$PYTHON_ROOT/requirements.txt"
-```
-
-Rebuild or update the Tykky environment after confirming the resolved changes.
-
-### Deliberately Refresh Compatible Versions
-
-Re-run:
-
-```bash
-uv pip compile \
-    "$PYTHON_ROOT/requirements.in" \
-    --output-file "$PYTHON_ROOT/requirements.txt" \
-    --python-version 3.11 \
-    --upgrade
-```
-
-This permits uv to refresh packages that are not fixed by the explicit SmartSim compatibility constraints.
-
-> [!WARNING]
-> `--upgrade` does not override explicit constraints in `requirements.in`, but it may update unconstrained dependencies. Validate SmartSim, SmartRedis, ONNX export, and solver coupling after each dependency refresh.
-
-### Repository Policy
-
-For reproducible builds, commit both files:
-
-```text
-requirements.in
-requirements.txt
-```
-
-Use `requirements.in` to review direct dependency and compatibility-policy changes. Use `requirements.txt` to reconstruct the exact resolved Python environment.
-
----
-
-## Adding or Updating Python Packages
-
-Tykky updates should install the complete resolved dependency set rather than maintaining a separate list of incremental packages.
-
-### 1. Edit the Direct Dependencies
+### Add a Package
 
 Open `requirements.in`:
 
@@ -939,30 +824,83 @@ Open `requirements.in`:
 nano -m "$PYTHON_ROOT/requirements.in"
 ```
 
-Add or remove the required packages while preserving the SmartSim compatibility constraints.
+Add the package on its own line.
 
-### 2. Recompile the Resolved Dependencies
+For example:
 
-Activate a Python 3.11 environment containing uv, then run:
-
-```bash
-uv pip compile \
-    "$PYTHON_ROOT/requirements.in" \
-    --output-file "$PYTHON_ROOT/requirements.txt" \
-    --python-version 3.11
+```text
+psutil
 ```
 
-To deliberately refresh compatible unconstrained packages:
+Save the file and rebuild or update the environment.
+
+### Remove a Package
+
+Open `requirements.in`:
 
 ```bash
-uv pip compile \
-    "$PYTHON_ROOT/requirements.in" \
-    --output-file "$PYTHON_ROOT/requirements.txt" \
-    --python-version 3.11 \
-    --upgrade
+nano -m "$PYTHON_ROOT/requirements.in"
 ```
 
-### 3. Create the Update Script
+Remove the package entry.
+
+Perform a complete rebuild so that the removed package and unused transitive dependencies are no longer included.
+
+### Preserve the Compatibility Constraints
+
+Keep the following entries unless the complete stack is deliberately revalidated:
+
+```text
+numpy<2.0.0
+jax[cuda12]==0.6.2
+protobuf==3.20.3
+smartsim==0.8.0
+```
+
+The Python and CMake constraints remain in `base4SmartSim.yml`:
+
+```text
+python=3.11
+cmake<3.30.0
+```
+
+### Reproduce an Existing Installed Package Set
+
+A previously generated `requirements.txt` records the package versions installed in that environment.
+
+To reproduce those versions, temporarily replace this command in `extra4SmartSim.sh`:
+
+```bash
+uv pip install \
+    --requirements "$PYTHON_ROOT/requirements.in"
+```
+
+with:
+
+```bash
+uv pip install \
+    --requirements "$PYTHON_ROOT/requirements.txt"
+```
+
+The patched SmartRedis Python client must still be installed separately from its source repository.
+
+For ordinary development builds, continue using `requirements.in`.
+
+---
+
+## Adding or Updating Python Packages
+
+### 1. Edit the Direct Dependencies
+
+Edit:
+
+```bash
+nano -m "$PYTHON_ROOT/requirements.in"
+```
+
+Preserve the SmartSim compatibility constraints.
+
+### 2. Create the Update Script
 
 Create `update4SmartSim.sh`:
 
@@ -970,13 +908,13 @@ Create `update4SmartSim.sh`:
 nano -m "$PYTHON_ROOT/update4SmartSim.sh"
 ```
 
-Insert the following block:
+Insert:
 
 ```bash
 #!/bin/bash
 set -e
 
-# Confirm that the build configuration is available
+# Confirm that the build variables are available
 : "${CW_BUILD_TMPDIR:?CW_BUILD_TMPDIR is not set}"
 : "${PYTHON_ROOT:?PYTHON_ROOT is not set}"
 
@@ -985,14 +923,43 @@ export TMPDIR="$CW_BUILD_TMPDIR"
 export PIP_CACHE_DIR="$CW_BUILD_TMPDIR/.pip_cache"
 export UV_CACHE_DIR="$CW_BUILD_TMPDIR/.uv_cache"
 
+# Limit simultaneous downloads on the CSC network
+export UV_CONCURRENT_DOWNLOADS=4
+
 mkdir -p "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
 
 # Install uv inside the active Tykky update environment
 python -m pip install --no-cache-dir uv
 
-# Apply the complete resolved Python dependency set
+# Resolve and install the current dependency set
 uv pip install \
-    --requirements "$PYTHON_ROOT/requirements.txt"
+    --requirements "$PYTHON_ROOT/requirements.in"
+
+# Reinstall the patched SmartRedis Python client
+rm -rf "$CW_BUILD_TMPDIR/SmartRedis"
+
+git clone \
+    https://github.com/boss507104/SmartRedis.git \
+    "$CW_BUILD_TMPDIR/SmartRedis"
+
+cd "$CW_BUILD_TMPDIR/SmartRedis"
+
+grep -q '#include <cstdint>' src/cpp/tensorpack.cpp || \
+    sed -i '30i #include <cstdint>' src/cpp/tensorpack.cpp
+
+OLD_CFLAGS="${CFLAGS-}"
+OLD_CXXFLAGS="${CXXFLAGS-}"
+OLD_CPPFLAGS="${CPPFLAGS-}"
+OLD_LDFLAGS="${LDFLAGS-}"
+
+unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
+
+python -m pip install --no-cache-dir .
+
+export CFLAGS="$OLD_CFLAGS"
+export CXXFLAGS="$OLD_CXXFLAGS"
+export CPPFLAGS="$OLD_CPPFLAGS"
+export LDFLAGS="$OLD_LDFLAGS"
 
 # Rebuild the SmartSim database dependencies
 export USE_SYSTEMD=no
@@ -1012,7 +979,18 @@ env \
         --skip-torch \
         --skip-tensorflow
 
-# Remove package caches
+# Verify the installed dependency relationships
+uv pip check
+
+# Record the updated installed package versions
+python -m pip list \
+    --format=freeze \
+    | grep -v '^smartredis==' \
+    | sort \
+    > "$PYTHON_ROOT/requirements.txt"
+
+# Remove temporary source and package caches
+rm -rf "$CW_BUILD_TMPDIR/SmartRedis"
 rm -rf "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
 ```
 
@@ -1022,15 +1000,28 @@ Make the script executable:
 chmod +x "$PYTHON_ROOT/update4SmartSim.sh"
 ```
 
-### 4. Apply the Update
+### 3. Apply the Update
+
+Request a compute node:
+
+```bash
+srun --account="$CSC_PROJECT" \
+    --partition=small \
+    --nodes=1 \
+    --ntasks=1 \
+    --cpus-per-task=16 \
+    --time=01:30:00 \
+    --pty bash
+```
 
 Load Tykky:
 
 ```bash
+module purge
 module load tykky
 ```
 
-Configure the build directories:
+Configure the temporary build directory:
 
 ```bash
 export TMPDIR="$TMP_BUILD_DIR"
@@ -1039,7 +1030,7 @@ export CW_BUILD_TMPDIR="$TMP_BUILD_DIR"
 mkdir -p "$TMPDIR"
 ```
 
-Update the existing environment:
+Apply the update:
 
 ```bash
 conda-containerize update \
@@ -1047,13 +1038,19 @@ conda-containerize update \
     "$ENV_PREFIX"
 ```
 
-Group related dependency changes into one update to minimise repeated container repackaging.
+Load and validate the updated environment:
 
-> [!NOTE]
-> A full rebuild is safer after substantial changes to SmartSim, SmartRedis, Python, NumPy, protobuf, JAX, CUDA, ONNX, compiler, or binary-library dependencies.
+```bash
+source "$BASE_SCRATCH/Python4SmartSim.sh"
+export JAX_PLATFORMS="cpu"
 
-> [!NOTE]
-> Updating the Python environment does not automatically rebuild the separate SmartRedis C++ and Fortran library under `$SMARTREDIS_DIR`. Rebuild the native library separately when its source or compiler toolchain changes.
+python --version
+uv pip check
+```
+
+Updating the Tykky Python environment does not rebuild the separate native SmartRedis library under `$SMARTREDIS_DIR`.
+
+Rebuild the native library separately when its source, compiler, or ABI changes.
 
 ---
 
@@ -1072,41 +1069,171 @@ rm -rf "$TMP_BUILD_DIR"
 mkdir -p "$TMP_BUILD_DIR"
 ```
 
-### 3. Verify the Configuration Files
+### 3. Request a Compute Node
+
+```bash
+srun --account="$CSC_PROJECT" \
+    --partition=small \
+    --nodes=1 \
+    --ntasks=1 \
+    --cpus-per-task=16 \
+    --time=01:30:00 \
+    --pty bash
+```
+
+### 4. Load Tykky
+
+```bash
+module purge
+module load tykky
+```
+
+### 5. Configure the Build Directory
+
+```bash
+export TMPDIR="$TMP_BUILD_DIR"
+export CW_BUILD_TMPDIR="$TMP_BUILD_DIR"
+```
+
+### 6. Verify the Configuration Files
 
 ```bash
 ls -l \
     "$PYTHON_ROOT/base4SmartSim.yml" \
     "$PYTHON_ROOT/extra4SmartSim.sh" \
-    "$PYTHON_ROOT/requirements.in" \
-    "$PYTHON_ROOT/requirements.txt"
+    "$PYTHON_ROOT/requirements.in"
 ```
 
-### 4. Rebuild the Tykky Environment
+### 7. Rebuild the Tykky Environment
 
 ```bash
-module load tykky
-
-export TMPDIR="$TMP_BUILD_DIR"
-export CW_BUILD_TMPDIR="$TMP_BUILD_DIR"
-
 conda-containerize new \
     --prefix "$ENV_PREFIX" \
     --post-install "$PYTHON_ROOT/extra4SmartSim.sh" \
     "$PYTHON_ROOT/base4SmartSim.yml"
 ```
 
-The rebuild uses the exact Python package versions recorded in `requirements.txt`.
+The rebuild resolves the dependency set from `requirements.in` and records the installed versions in `requirements.txt`.
 
-### 5. Rebuild SmartRedis Native Libraries When Necessary
+### 8. Rebuild the SmartRedis Native Library
 
-Remove and rebuild `$SMARTREDIS_DIR` when:
+Rebuild `$SMARTREDIS_DIR` when:
 
 * the SmartRedis source changes;
 * the compiler module changes;
 * the target CSC system changes;
-* the Fortran or C++ ABI changes;
+* the C++, C, or Fortran ABI changes;
 * native linkage errors appear.
+
+---
+
+## Complete Clean Installation
+
+Run the global configuration block.
+
+Remove the existing Python environment, temporary build data, and native SmartRedis installation:
+
+```bash
+rm -rf "$ENV_PREFIX"
+rm -rf "$TMP_BUILD_DIR"
+rm -rf "$SMARTREDIS_DIR"
+
+mkdir -p "$PYTHON_ROOT/envs" "$TMP_BUILD_DIR"
+```
+
+Confirm that the Python configuration files exist:
+
+```bash
+ls -l \
+    "$PYTHON_ROOT/base4SmartSim.yml" \
+    "$PYTHON_ROOT/requirements.in" \
+    "$PYTHON_ROOT/extra4SmartSim.sh"
+```
+
+Make the post-installation script executable:
+
+```bash
+chmod +x "$PYTHON_ROOT/extra4SmartSim.sh"
+```
+
+Request a compute node:
+
+```bash
+srun --account="$CSC_PROJECT" \
+    --partition=small \
+    --nodes=1 \
+    --ntasks=1 \
+    --cpus-per-task=16 \
+    --time=01:30:00 \
+    --pty bash
+```
+
+Load Tykky:
+
+```bash
+module purge
+module load tykky
+```
+
+Configure the build directory:
+
+```bash
+export TMPDIR="$TMP_BUILD_DIR"
+export CW_BUILD_TMPDIR="$TMP_BUILD_DIR"
+```
+
+Build the Tykky environment:
+
+```bash
+conda-containerize new \
+    --prefix "$ENV_PREFIX" \
+    --post-install "$PYTHON_ROOT/extra4SmartSim.sh" \
+    "$PYTHON_ROOT/base4SmartSim.yml"
+```
+
+Build the SmartRedis native library using the compiler modules for the target CSC system.
+
+Create the loader:
+
+```bash
+cat <<EOF > "$BASE_SCRATCH/Python4SmartSim.sh"
+#!/bin/bash
+
+module load gcc/13.4.0
+
+export ENV_PREFIX="$ENV_PREFIX"
+export SMARTREDIS_DIR="$SMARTREDIS_DIR"
+
+export PATH="\$ENV_PREFIX/bin:\$PATH"
+export LD_LIBRARY_PATH="\$SMARTREDIS_DIR/install/lib:\${LD_LIBRARY_PATH:-}"
+
+export SMARTSIM_DB_FILE_PARSE_TRIALS=600
+export JAX_PLATFORMS="gpu"
+EOF
+
+chmod +x "$BASE_SCRATCH/Python4SmartSim.sh"
+```
+
+Load and validate:
+
+```bash
+source "$BASE_SCRATCH/Python4SmartSim.sh"
+export JAX_PLATFORMS="cpu"
+
+python --version
+
+python -c "
+import jax
+import equinox
+import numpy
+import onnx
+import smartredis
+import smartsim
+
+print('SmartSim environment is ready.')
+print(jax.devices())
+"
+```
 
 ---
 
@@ -1122,97 +1249,83 @@ rm -rf "$TMP_BUILD_DIR"
 mkdir -p "$TMP_BUILD_DIR"
 ```
 
-Then repeat the Tykky container build.
+Repeat the normal Tykky build.
 
-Remove the native SmartRedis source and installation only when a complete native rebuild is required:
+Remove the native SmartRedis installation only when a native rebuild is required:
 
 ```bash
 rm -rf "$SMARTREDIS_DIR"
 ```
 
-### `requirements.txt` Does Not Exist
+### `requirements.txt` Is Missing
 
-Verify the direct dependency file:
+The file is generated after the Python packages, SmartRedis Python client, and SmartSim database dependencies have been installed successfully.
 
-```bash
-ls -l "$PYTHON_ROOT/requirements.in"
-```
-
-Compile it:
+Run a complete Tykky build:
 
 ```bash
-uv pip compile \
-    "$PYTHON_ROOT/requirements.in" \
-    --output-file "$PYTHON_ROOT/requirements.txt" \
-    --python-version 3.11
-```
+module purge
+module load tykky
 
-### uv Cannot Find the Active Environment
+export TMPDIR="$TMP_BUILD_DIR"
+export CW_BUILD_TMPDIR="$TMP_BUILD_DIR"
 
-Confirm that the resolver or Tykky post-installation script runs inside a Python environment:
-
-```bash
-which python
-python --version
-python -m pip --version
-```
-
-Install uv through the active Python interpreter:
-
-```bash
-python -m pip install --no-cache-dir uv
+conda-containerize new \
+    --prefix "$ENV_PREFIX" \
+    --post-install "$PYTHON_ROOT/extra4SmartSim.sh" \
+    "$PYTHON_ROOT/base4SmartSim.yml"
 ```
 
 ### Package Resolution Fails
 
-Run the compile command directly:
+Open the direct dependency file:
 
 ```bash
-uv pip compile \
-    "$PYTHON_ROOT/requirements.in" \
-    --output-file "$PYTHON_ROOT/requirements.txt" \
-    --python-version 3.11
+nano -m "$PYTHON_ROOT/requirements.in"
 ```
 
-The resolver output should identify incompatible direct dependencies.
+Preserve these compatibility constraints:
 
-Do not remove the SmartSim-specific compatibility constraints merely to force a successful resolution.
+```text
+numpy<2.0.0
+jax[cuda12]==0.6.2
+protobuf==3.20.3
+smartsim==0.8.0
+```
+
+Repeat the build after correcting the conflicting dependency.
+
+### Package Downloads Are Slow
+
+Large binary packages and CUDA dependencies may require substantial downloads.
+
+The installation script limits uv to four simultaneous downloads:
+
+```bash
+export UV_CONCURRENT_DOWNLOADS=4
+```
+
+The total build time still depends on the network connection between the CSC compute node and the external package servers.
 
 ### Package Installation Exceeds the Home Quota
 
-Verify that the temporary directories point to scratch:
+Run the global configuration block before starting the build.
 
-```bash
-echo "$TMPDIR"
-echo "$PIP_CACHE_DIR"
-echo "$UV_CACHE_DIR"
-```
-
-They should point under:
+Temporary files and package caches are redirected to:
 
 ```text
 $BASE_SCRATCH/.tykky_runtime
 ```
 
-### JAX Reports That No GPU Is Available
+### JAX Reports No GPU
 
-Confirm that the shell runs inside a GPU allocation:
-
-```bash
-nvidia-smi
-```
-
-Check the JAX devices:
-
-```bash
-python -c "import jax; print(jax.devices())"
-```
-
-For CPU-only use:
+For CPU execution:
 
 ```bash
 export JAX_PLATFORMS="cpu"
 ```
+
+For GPU execution, run inside a GPU allocation.
 
 ### SmartSim Cannot Locate the Database Executable
 
@@ -1240,13 +1353,13 @@ smart build \
 
 ### SmartRedis Native Library Cannot Be Found
 
-Inspect the installation:
+Inspect the native installation:
 
 ```bash
 ls -la "$SMARTREDIS_DIR/install/lib"
 ```
 
-Verify the runtime path:
+Verify the runtime library path:
 
 ```bash
 echo "$LD_LIBRARY_PATH"
@@ -1276,12 +1389,14 @@ grep -n '#include <cstdint>' \
     "$SMARTREDIS_DIR/src/cpp/tensorpack.cpp"
 ```
 
-Remove previous build artefacts before rebuilding:
+Remove previous build artefacts:
 
 ```bash
 cd "$SMARTREDIS_DIR"
 rm -rf build install
 ```
+
+Repeat the native build.
 
 ### SmartSim Reports Incompatible Pointer Errors
 
@@ -1298,12 +1413,18 @@ env \
         --skip-tensorflow
 ```
 
-### Import Errors After an Incremental Update
+### Import Errors After an Update
+
+Verify the installed dependency relationships:
+
+```bash
+uv pip check
+```
 
 Inspect the installed versions:
 
 ```bash
-python -m pip freeze
+python -m pip list --format=freeze
 ```
 
 Compare them with:
@@ -1312,13 +1433,7 @@ Compare them with:
 cat "$PYTHON_ROOT/requirements.txt"
 ```
 
-When the environment becomes inconsistent, rebuild the complete Tykky image rather than stacking further updates.
-
-### The Build Takes Too Long
-
-Request a longer interactive allocation appropriate for the CSC system and partition.
-
-Avoid running package installation, SmartSim database compilation, or SmartRedis native compilation directly on a login node.
+Perform a complete rebuild instead of stacking additional incremental updates when the environment becomes inconsistent.
 
 ---
 
@@ -1347,15 +1462,21 @@ The complete production architecture, Slurm templates, database placement strate
 * Replace `Harry` with the actual personal or shared directory under the CSC project.
 * Replace `Dumbledore` with the preferred environment nickname.
 * `PROJECT_USER_DIR` is not necessarily the same as the CSC login username.
-* `requirements.in` contains direct Python dependencies and SmartSim compatibility constraints.
-* `requirements.txt` contains the exact direct and transitive versions resolved by uv.
-* Commit both dependency files when reproducible builds matter.
-* Recompile `requirements.txt` after changing `requirements.in`.
-* Preserve the SmartSim, JAX, NumPy, protobuf, Python, and CMake compatibility constraints unless the complete stack has been revalidated.
-* The SmartRedis Python client and SmartRedis native libraries serve different purposes and are built separately.
-* The native SmartRedis library must be rebuilt when its compiler or source changes.
+* Dependency resolution and installation run inside the Tykky Python 3.11 environment.
+* No external Conda, Miniforge, Mamba, Python module, resolver environment, or virtual environment is required.
+* `requirements.in` contains the direct dependencies and SmartSim compatibility constraints.
+* `requirements.txt` records the package versions installed during the build.
+* `requirements.txt` is an installed-state snapshot rather than a separately compiled lockfile.
+* New builds from `requirements.in` may install newer compatible versions of unconstrained packages.
+* Use a previously generated `requirements.txt` when the same installed package versions must be reconstructed.
+* The patched SmartRedis Python client is installed separately from its source repository.
+* The SmartRedis Python client is excluded from `requirements.txt`.
+* Preserve the SmartSim, JAX, NumPy, protobuf, Python, and CMake compatibility constraints.
+* The SmartRedis Python client and SmartRedis native libraries serve different purposes.
+* The native SmartRedis library must be rebuilt when its compiler, source, target system, or ABI changes.
+* `UV_CONCURRENT_DOWNLOADS=4` limits simultaneous external package downloads.
 * Missing PyTorch and TensorFlow backends in `smart validate` are intentional.
 * GPU execution requires a GPU allocation and compatible host drivers.
-* Use batch or interactive compute nodes for environment builds and computational workloads.
+* Use compute nodes for package installation, SmartSim database compilation, SmartRedis native compilation, and computational workloads.
 * Avoid performing large package installations or native builds directly on CSC login nodes.
 * Prefer a complete rebuild over repeated incremental updates when the dependency set changes substantially.
