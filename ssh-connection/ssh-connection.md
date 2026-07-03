@@ -9,11 +9,11 @@ This guide covers:
 
 This guide assumes that the CSC certificate helper and the `csc-ssh-keys` command have already been configured on the local workstation.
 
-***
+---
 
 ## 1. Add the Roihu Hosts to the SSH Configuration
 
-Create the SSH configuration directory when necessary:
+Create the SSH configuration directory if it does not already exist:
 
 ```bash
 mkdir -p ~/.ssh
@@ -30,20 +30,20 @@ Add the following entries:
 ```ssh
 Host roihu-cpu
     HostName roihu-cpu.csc.fi
-    User kanghans
+    User YOUR_CSC_USERNAME
     IdentityFile ~/.ssh/id_ed25519
     IdentitiesOnly yes
 
 Host roihu-gpu
     HostName roihu-gpu.csc.fi
-    User kanghans
+    User YOUR_CSC_USERNAME
     IdentityFile ~/.ssh/id_ed25519
     IdentitiesOnly yes
 ```
 
-Replace `kanghans` with your CSC username when configuring the setup for another account.
+Replace `YOUR_CSC_USERNAME` with your own CSC username.
 
-***
+---
 
 ## 2. Set the SSH File Permissions
 
@@ -62,7 +62,7 @@ Verify the permissions:
 ls -la ~/.ssh
 ```
 
-***
+---
 
 ## 3. Generate a CSC SSH Certificate
 
@@ -80,7 +80,7 @@ Verify that the certificate file exists:
 ls -l ~/.ssh/id_ed25519-cert.pub
 ```
 
-***
+---
 
 ## 4. Add the SSH Key to the Authentication Agent
 
@@ -103,7 +103,7 @@ Verify the loaded identities:
 ssh-add -l
 ```
 
-***
+---
 
 ## 5. Test the Roihu Connections
 
@@ -131,7 +131,7 @@ Exit the remote session:
 exit
 ```
 
-***
+---
 
 ## 6. Routine Connections
 
@@ -153,7 +153,7 @@ Connect to the Roihu GPU login node:
 ssh roihu-gpu
 ```
 
-***
+---
 
 ## 7. Troubleshooting
 
@@ -220,12 +220,12 @@ Use more detailed output when necessary:
 ssh -vvv roihu-cpu
 ```
 
-***
+---
 
 ## 8. Notes
 
-* CSC SSH certificates expire periodically and must be regenerated with `csc-ssh-keys`.
-* The `User` value in `~/.ssh/config` must match the CSC username.
-* The SSH configuration cannot directly reuse the shell variable `CSC_USER`.
-* Keep the private key restricted to the owner with permission mode `600`.
-* `roihu-cpu` and `roihu-gpu` connect to login nodes. Computational workloads should run on Slurm-allocated compute nodes rather than directly on the login nodes.
+- CSC SSH certificates expire periodically and must be regenerated with `csc-ssh-keys`.
+- Replace `YOUR_CSC_USERNAME` in `~/.ssh/config` with your own CSC username.
+- The SSH configuration cannot directly reuse the shell variable `CSC_USER`.
+- Keep the private key restricted to the owner with permission mode `600`.
+- `roihu-cpu` and `roihu-gpu` connect to login nodes. Computational workloads should run on Slurm-allocated compute nodes rather than directly on the login nodes.
