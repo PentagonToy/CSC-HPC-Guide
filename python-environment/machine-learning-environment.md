@@ -40,12 +40,12 @@ Execute the following block to configure the project paths and environment name.
 ```bash
 # --- USER CONFIGURATION START ---
 export CSC_PROJECT="project_xxxxxxx"        # Your CSC project ID
-export CSC_USER="USERNAME"                  # Your CSC username
+export PROJECT_USER_DIR="xxxxxxxx"          # Your directory under the CSC project
 export ENV_NICKNAME="NICKNAME"              # Desired environment name
 # --- USER CONFIGURATION END ---
 
 # Derived paths
-export BASE_SCRATCH="/scratch/$CSC_PROJECT/$CSC_USER/Utilities"
+export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
 export PYTHON_ROOT="$BASE_SCRATCH/Python"
 export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12"
 export TMP_BUILD_DIR="$BASE_SCRATCH/.tykky_runtime"
@@ -58,12 +58,37 @@ mkdir -p "$PYTHON_ROOT/envs" "$TMP_BUILD_DIR"
 echo "Configuration loaded for $CSC_PROJECT."
 ```
 
+The configuration variables represent:
+
+```text
+CSC_PROJECT       CSC project ID
+PROJECT_USER_DIR  Personal or shared directory under the CSC project
+ENV_NICKNAME      Name assigned to the Python environment
+```
+
+For example:
+
+```bash
+export CSC_PROJECT="project_xxxxxxx"
+export PROJECT_USER_DIR="Hanseul"
+export ENV_NICKNAME="PentagonToy"
+```
+
+The resulting base path is:
+
+```text
+/scratch/project_xxxxxxx/Hanseul/Utilities
+```
+
+> [!NOTE]
+> `PROJECT_USER_DIR` is not necessarily the same as your CSC login username. It identifies the directory located directly under the CSC project scratch path.
+
 **Directory Structure**
 
 ```plaintext
 /scratch/
 └── $CSC_PROJECT/
-    └── $CSC_USER/
+    └── $PROJECT_USER_DIR/
         └── Utilities/                       # $BASE_SCRATCH
             ├── .tykky_runtime/              # $TMP_BUILD_DIR
             └── Python/                      # $PYTHON_ROOT
@@ -770,6 +795,8 @@ Avoid running the build directly on a login node.
 ## Notes
 
 * The environment uses Python 3.12.
+* `PROJECT_USER_DIR` identifies the personal or shared directory directly under the CSC project scratch path.
+* `PROJECT_USER_DIR` is not necessarily the same as the CSC login username.
 * Python packages are intentionally specified without strict version pins.
 * uv selects a compatible direct and transitive dependency set during each build.
 * The exact selected versions are recorded in the compiled `requirements.txt`.
