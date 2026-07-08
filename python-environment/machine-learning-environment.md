@@ -1001,7 +1001,7 @@ cat <<'EOF' > "$BASE_SCRATCH/Python4ML.sh"
 # Project configuration
 export CSC_PROJECT="project_xxxxxxx"
 export PROJECT_USER_DIR="Harry"
-export ENV_NICKNAME="PentagonToy"
+export ENV_NICKNAME="Dumbledore"
 
 # Derived paths
 export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
