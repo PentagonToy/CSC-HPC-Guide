@@ -105,6 +105,12 @@ srun --account=project_xxxxxxxx \
     --pty bash
 ```
 
+This CPU interactive allocation requests:
+
+- 32 CPU cores
+- 62 GiB of memory
+- 9 hours of runtime
+
 Wait until Slurm grants the allocation.
 
 Verify that the shell has moved to a compute node:
@@ -121,8 +127,16 @@ From the Roihu GPU login node:
 sinteractive \
     --account project_xxxxxxxx \
     --gpu \
+    --cores 72 \
     --time 09:00:00
 ```
+
+This GPU interactive allocation requests:
+
+- 72 CPU cores
+- 1 GPU
+- fixed GPU-node memory
+- 9 hours of runtime
 
 Wait until Slurm grants the allocation.
 
@@ -138,7 +152,7 @@ Verify that a GPU is visible:
 nvidia-smi
 ```
 
-> The `gpuinteractive` partition should be accessed through `sinteractive` from the `roihu-gpu` login node. The partition currently provides full GPUs until GPU slices are fully configured.
+> The `gpuinteractive` partition should be accessed through `sinteractive` from the `roihu-gpu` login node. The partition currently provides full GPUs until GPU slices are fully configured. The GPU interactive memory is fixed by the partition; `sinteractive` may show 110000 MB, while Slurm may override it to 217086 MB.
 
 ---
 
@@ -311,6 +325,7 @@ vscode-interactive-gpu() {
     sinteractive \
         --account project_xxxxxxxx \
         --gpu \
+        --cores 72 \
         --time 09:00:00 \
         ~/bin/vscode-cli-arm64/code tunnel --accept-server-license-terms
 }
@@ -408,6 +423,7 @@ vscode-interactive-gpu
 sinteractive \
     --account project_xxxxxxxx \
     --gpu \
+    --cores 72 \
     --time 09:00:00
 ```
 
@@ -450,7 +466,9 @@ exit
 - Keep the original SSH terminal open while using VS Code.
 - The tunnel stops when the Slurm allocation ends.
 - The maximum CPU interactive allocation used in this guide is 32 CPU cores and 62 GiB of RAM.
-- The maximum GPU interactive time used in this guide is 12 hours.
+- The GPU interactive allocation used in this guide requests 72 CPU cores, 1 GPU, and 9 hours of runtime.
+- The GPU interactive partition uses fixed memory. `sinteractive` may show 110000 MB, while Slurm may override it to 217086 MB.
+- The maximum GPU interactive runtime is 12 hours.
 - The `gpuinteractive` partition should be accessed through `sinteractive` from the `roihu-gpu` login node.
 - The `gpuinteractive` partition currently provides full GPUs until GPU slices are fully configured.
 - Use batch jobs for long-running production workloads.
