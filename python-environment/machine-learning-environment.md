@@ -41,6 +41,52 @@ Dependency installation takes place inside the Python 3.12 environment created b
 
 ---
 
+## Build Flow
+
+Use the x64 track for Roihu CPU nodes and other x86_64 systems such as Puhti and Mahti.
+
+Use the ARM64 track for Roihu GPU nodes.
+
+If you do not use Roihu GPU nodes, the ARM64 track can be skipped.
+
+```text
+Start
+  |
+  v
+Choose target architecture
+  |
+  +-- x64 / CPU nodes
+  |     |
+  |     v
+  |   Run x64 Global Configuration
+  |     |
+  |     v
+  |   Build ML Tykky env:
+  |   $PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-x64
+  |
+  +-- ARM64 / Roihu GPU nodes
+        |
+        v
+      Run ARM64 Global Configuration
+        |
+        v
+      Build ML Tykky env:
+      $PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-arm64
+
+After the required architecture tracks are built:
+  |
+  v
+Create Python4ML.sh
+  |
+  v
+source Python4ML.sh
+  |
+  v
+The loader selects x64 or ARM64 automatically from uname -m
+```
+
+---
+
 ## Global Configuration
 
 Execute one of the following configuration blocks depending on the target node architecture.
@@ -435,6 +481,8 @@ ls -l \
 Remove an existing or incomplete environment:
 
 ```bash
+echo "This will remove only this Tykky environment:"
+echo "$ENV_PREFIX"
 rm -rf "$ENV_PREFIX"
 ```
 
@@ -619,12 +667,6 @@ Load the environment:
 source "$BASE_SCRATCH/Python4ML.sh"
 ```
 
-Use the CPU backend when validating on a CPU node:
-
-```bash
-export JAX_PLATFORMS="cpu"
-```
-
 Verify the core package versions:
 
 ```bash
@@ -640,6 +682,7 @@ print(f'JAX:        {jax.__version__}')
 print(f'Equinox:    {eqx.__version__}')
 print(f'jax2onnx:   {version(\"jax2onnx\")}')
 print(f'NumPy:      {np.__version__}')
+print(f'Backend:    {jax.default_backend()}')
 print(f'Devices:    {jax.devices()}')
 "
 ```
@@ -850,7 +893,6 @@ Load and validate the updated environment:
 
 ```bash
 source "$BASE_SCRATCH/Python4ML.sh"
-export JAX_PLATFORMS="cpu"
 
 python --version
 python -m pip freeze
@@ -859,6 +901,14 @@ python -m pip freeze
 ---
 
 ## Rebuilding the Environment
+
+Confirm the target paths:
+
+```bash
+echo "ENV_ARCH=$ENV_ARCH"
+echo "ENV_PREFIX=$ENV_PREFIX"
+echo "TMP_BUILD_DIR=$TMP_BUILD_DIR"
+```
 
 Remove the existing environment:
 
@@ -928,7 +978,15 @@ The rebuild installs the package set defined in `requirements.in` and records th
 
 Run the global configuration block for the target architecture.
 
-Remove the existing environment and temporary build data:
+Confirm the target paths:
+
+```bash
+echo "ENV_ARCH=$ENV_ARCH"
+echo "ENV_PREFIX=$ENV_PREFIX"
+echo "TMP_BUILD_DIR=$TMP_BUILD_DIR"
+```
+
+Remove the existing environment and temporary build data for the selected architecture:
 
 ```bash
 rm -rf "$ENV_PREFIX"
@@ -1050,11 +1108,12 @@ case "$ENV_ARCH" in
 esac
 EOF
 ```
+
+Make the loader executable:
+
 ```bash
 chmod +x "$BASE_SCRATCH/Python4ML.sh"
 ```
-
-
 
 Edit the loader and replace `project_xxxxxxx`, `Harry`, and `Dumbledore` with your actual values.
 
@@ -1062,7 +1121,6 @@ Load and validate:
 
 ```bash
 source "$BASE_SCRATCH/Python4ML.sh"
-export JAX_PLATFORMS="cpu"
 
 python --version
 
@@ -1085,6 +1143,9 @@ print(jax.devices())
 ### Total Environment Reset
 
 ```bash
+echo "ENV_PREFIX=$ENV_PREFIX"
+echo "TMP_BUILD_DIR=$TMP_BUILD_DIR"
+
 rm -rf "$ENV_PREFIX"
 rm -rf "$TMP_BUILD_DIR"
 mkdir -p "$TMP_BUILD_DIR"
@@ -1154,11 +1215,23 @@ export JAX_PLATFORMS="cpu"
 
 For GPU execution, run inside a GPU allocation and use the ARM64 environment on Roihu GPU nodes.
 
+The architecture-aware loader sets:
+
+```text
+x64    -> JAX_PLATFORMS=cpu
+arm64  -> JAX_PLATFORMS=cuda
+```
+
+Avoid setting `JAX_PLATFORMS=gpu`, because it may trigger backend discovery paths that are not valid on the target system.
+
 ### Import Errors After an Update
 
 Remove the environment and perform a complete rebuild:
 
 ```bash
+echo "ENV_PREFIX=$ENV_PREFIX"
+echo "TMP_BUILD_DIR=$TMP_BUILD_DIR"
+
 rm -rf "$ENV_PREFIX"
 rm -rf "$TMP_BUILD_DIR"
 mkdir -p "$TMP_BUILD_DIR"
@@ -1171,6 +1244,9 @@ Then run the normal Tykky build on the matching architecture.
 Remove the current environment and rebuild it from the configuration files:
 
 ```bash
+echo "ENV_PREFIX=$ENV_PREFIX"
+echo "TMP_BUILD_DIR=$TMP_BUILD_DIR"
+
 rm -rf "$ENV_PREFIX"
 rm -rf "$TMP_BUILD_DIR"
 mkdir -p "$TMP_BUILD_DIR"
@@ -1199,6 +1275,8 @@ Load Tykky and repeat the build.
 * New builds from `requirements.in` may install newer compatible versions.
 * Use the recorded `requirements.txt` when an exact package set must be reproduced.
 * `jax[cuda12]` installs the CUDA 12-compatible JAX package set.
+* The architecture-aware loader sets `JAX_PLATFORMS=cpu` on x64 nodes and `JAX_PLATFORMS=cuda` on ARM64 nodes.
+* Avoid setting `JAX_PLATFORMS=gpu`.
 * GPU execution requires a GPU allocation and compatible host drivers.
 * Use compute nodes for package installation and environment builds.
 * Avoid performing large package installations directly on CSC login nodes.
