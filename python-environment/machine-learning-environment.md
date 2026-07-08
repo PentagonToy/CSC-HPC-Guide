@@ -981,15 +981,22 @@ Create the architecture-aware loader:
 cat <<'EOF' > "$BASE_SCRATCH/Python4ML.sh"
 #!/bin/bash
 
-PYTHON_ROOT="/scratch/project_xxxxxxx/Harry/Utilities/Python"
-ENV_NICKNAME="Dumbledore"
+# Project configuration
+export CSC_PROJECT="project_xxxxxxx"
+export PROJECT_USER_DIR="Harry"
+export ENV_NICKNAME="Dumbledore"
 
+# Derived paths
+export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
+export PYTHON_ROOT="$BASE_SCRATCH/Python"
+
+# Select the matching Tykky environment for the current node architecture
 case "$(uname -m)" in
     x86_64)
-        export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-x64"
+        export ENV_ARCH="x64"
         ;;
     aarch64)
-        export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-arm64"
+        export ENV_ARCH="arm64"
         ;;
     *)
         echo "Unsupported architecture: $(uname -m)"
@@ -997,11 +1004,14 @@ case "$(uname -m)" in
         ;;
 esac
 
+export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
+
+# Tykky executable path
 export PATH="$ENV_PREFIX/bin:$PATH"
+
+# Prefer the JAX GPU backend by default
 export JAX_PLATFORMS="gpu"
 EOF
-
-chmod +x "$BASE_SCRATCH/Python4ML.sh"
 ```
 
 Edit the loader and replace `project_xxxxxxx`, `Harry`, and `Dumbledore` with your actual values.
