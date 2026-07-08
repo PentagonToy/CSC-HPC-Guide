@@ -1,197 +1,102 @@
-# VS Code Tunnel on a Slurm Interactive Node on CSC Roihu
+# VS Code Tunnel on Slurm Interactive Nodes on CSC Roihu
 
-This guide covers:
+This guide covers the installation and configuration steps for running VS Code Tunnels on CSC Roihu compute nodes.
 
-1. Installing the VS Code CLI
-2. Allocating a Slurm interactive CPU or GPU node
-3. Starting the VS Code Tunnel on the allocated node
-4. Connecting from local VS Code
-5. Closing the tunnel and releasing the allocation
+## Prerequisites
 
-This guide assumes that:
+This guide assumes the prior configuration of the following components:
 
-1. The `csc-ssh-keys` command has already been configured.
-2. The `roihu-cpu` and `roihu-gpu` SSH hosts have already been configured.
-3. `ssh roihu-cpu` and `ssh roihu-gpu` connect successfully.
+1. The `csc-ssh-keys` command is functional on the local workstation.
+2. The `roihu-cpu` and `roihu-gpu` SSH hosts are configured in the local SSH configuration file.
+3. The commands `ssh roihu-cpu` and `ssh roihu-gpu` connect successfully to their respective login nodes.
 
-> **Placeholder values:** `Harry` is a placeholder username inspired by Harry Potter. Replace `Harry` with your actual CSC username and `project_xxxxxxxx` with your actual CSC project number.
-
-The VS Code Tunnel runs on the allocated Slurm compute node. Local VS Code therefore connects directly to that compute node.
+> **Placeholder Values:** `Harry` represents a placeholder username. Replace `Harry` with your actual CSC username and `project_xxxxxxxx` with your valid CSC project number.
 
 ---
 
 ## 1. Install the VS Code CLI
 
-On the local workstation, renew the CSC SSH certificate:
+Execute these commands on the local workstation to renew the certificate and connect to the cluster:
 
 ```bash
 csc-ssh-keys
-```
-
-Connect to Roihu:
-
-```bash
 ssh roihu-cpu
 ```
 
-Create the installation directory:
+Execute the following commands on the login node to download and extract the executable:
 
 ```bash
 mkdir -p ~/bin
 cd ~/bin
-```
-
-Download the stable VS Code CLI:
-
-```bash
-curl -Lk 'https://code.visualstudio.com/sha/download?build=stable&os=cli-alpine-x64' \
-    --output vscode_cli.tar.gz
-```
-
-Extract the archive:
-
-```bash
+curl -Lk 'https://code.visualstudio.com/sha/download?build=stable&os=cli-alpine-x64' --output vscode_cli.tar.gz
 tar -xf vscode_cli.tar.gz
-```
-
-Verify the installation:
-
-```bash
 ~/bin/code --version
 ```
-
-> This installation only needs to be completed once. If `~/bin` is shared between Roihu login environments, the same installation can be used from both `roihu-cpu` and `roihu-gpu`.
 
 ---
 
 ## 2. Allocate an Interactive Node
 
-Use the CPU or GPU login node depending on the resource type.
+### 2.1 CPU Allocation
 
-### CPU interactive node
-
-Connect to the Roihu CPU login node:
+Execute `srun` from the `roihu-cpu` login node to request interactive CPU resources:
 
 ```bash
-ssh roihu-cpu
+srun --account=project_xxxxxxxx \
+    --partition=interactive \
+    --cpus-per-task=32 \
+    --mem=62G \
+    --time=09:00:00 \
+    --pty bash
 ```
 
-From the Roihu CPU login node:
+### 2.2 GPU Allocation
+
+Execute `srun` from the `roihu-gpu` login node to request an interactive GPU resource:
 
 ```bash
-sinteractive --account project_xxxxxxxx --cores 32
+srun --account=project_xxxxxxxx \
+    --partition=gpuinteractive \
+    --gres=gpu:1 \
+    --time=12:00:00 \
+    --pty bash
 ```
 
-Wait until Slurm grants the allocation.
-
-Verify that the shell has moved to a compute node:
-
-```bash
-hostname
-```
-
-### GPU interactive node
-
-Connect to the Roihu GPU login node:
-
-```bash
-ssh roihu-gpu
-```
-
-From the Roihu GPU login node:
-
-```bash
-sinteractive --account project_xxxxxxxx
-```
-
-Wait until Slurm grants the allocation.
-
-Verify that the shell has moved to a compute node:
+Verification of the host shift requires the execution of the `hostname` command.
 
 ```bash
 hostname
 ```
-
-Verify that a GPU is visible:
-
-```bash
-nvidia-smi
-```
-
-> Request CPU interactive nodes from `roihu-cpu.csc.fi` and GPU interactive nodes from `roihu-gpu.csc.fi`.
 
 ---
 
 ## 3. Start the VS Code Tunnel
 
-From the allocated compute node:
+Launch the tunnel binary from the allocated compute node:
 
 ```bash
 cd ~/bin
 ./code tunnel --accept-server-license-terms
 ```
 
-During the first run:
+Authentication requires the following sequential steps during the initial execution:
 
-1. Select **GitHub Account**.
-2. Open the following page on the local workstation:
-
-   ```text
-   https://github.com/login/device
-   ```
-
-3. Sign in with the same GitHub account used in local VS Code.
-4. Enter the temporary device code shown in the Roihu terminal.
-5. Approve access for Visual Studio Code.
-6. Use one of the following tunnel names when prompted:
-
-   ```text
-   roihu-cpu-interactive
-   ```
-
-   or:
-
-   ```text
-   roihu-gpu-interactive
-   ```
-
-> Leave the tunnel process and SSH terminal running while using VS Code.
+1. Select **GitHub Account** within the terminal prompt.
+2. Open `https://github.com/login/device` on the local workstation browser.
+3. Input the temporary device code displayed in the cluster terminal.
+4. Name the tunnel `roihu-cpu-interactive` or `roihu-gpu-interactive` depending on the active node type.
 
 ---
 
 ## 4. Connect from Local VS Code
 
-On the local workstation:
+Establish the connection by performing these actions inside the local VS Code application:
 
-1. Open VS Code.
-2. Sign in with the same GitHub account.
-3. Open **Remote Explorer**.
-4. Select **Tunnels**.
-5. Select the tunnel name:
+1. Authenticate with the identical GitHub account used during the cluster setup phase.
+2. Navigate to the **Remote Explorer** tab and select **Tunnels**.
+3. Choose the configured tunnel name, either `roihu-cpu-interactive` or `roihu-gpu-interactive`.
 
-   ```text
-   roihu-cpu-interactive
-   ```
-
-   or:
-
-   ```text
-   roihu-gpu-interactive
-   ```
-
-Alternatively, open the Command Palette with **Command-Shift-P** and run:
-
-```text
-Remote Tunnels: Connect to Tunnel
-```
-
-VS Code now connects directly to the allocated compute node.
-
-Open the project directory through:
-
-**File → Open Folder**
-
-For example:
+Access the specific project directory by navigating through **File → Open Folder**:
 
 ```text
 /scratch/project_xxxxxxxx/Harry
@@ -201,224 +106,88 @@ For example:
 
 ## 5. Close the Tunnel and Release the Node
 
-Close the remote VS Code window.
+Termination of the session requires the systematic closure of all remote connections:
 
-Return to the SSH terminal running the tunnel and press:
-
-```text
-Ctrl-C
-```
-
-Exit the interactive compute node:
+1. Close the remote VS Code window on the local workstation.
+2. Press `Ctrl-C` in the cluster SSH terminal to kill the tunnel process.
+3. Terminate the compute node allocation and the login node session:
 
 ```bash
 exit
-```
-
-Then disconnect from Roihu:
-
-```bash
 exit
 ```
 
 ---
 
-## 6. Optional: Shell Function Shortcut
+## 6. Shell Function Shortcuts
 
-To simplify allocation and tunnel startup, create a helper function on Roihu.
-
-Create the directory for bash includes:
+Automated allocation and tunnel startup functions save time during daily operations. Append the following configurations to the environment scripts:
 
 ```bash
 mkdir -p ~/.bashrc.d
 ```
 
-### CPU shortcut
-
-Create this file on `roihu-cpu`:
+### 6.1 CPU Launcher Script
 
 ```bash
-cat > ~/.bashrc.d/vscode-interactive.sh << 'EOF'
-# Slurm CPU interactive allocation launcher
-vscode-interactive() {
-    sinteractive --account project_xxxxxxxx --cores 32
+cat > ~/.bashrc.d/vscode-interactive-cpu.sh << 'EOF'
+vscode-interactive-cpu() {
+    srun --account=project_xxxxxxxx \
+        --partition=interactive \
+        --cpus-per-task=32 \
+        --mem=62G \
+        --time=09:00:00 \
+        --pty ~/bin/code tunnel --accept-server-license-terms
 }
 EOF
 ```
 
-Reload the shell configuration:
+### 6.2 GPU Launcher Script
 
 ```bash
-source ~/.bashrc
-```
-
-Confirm the function is available:
-
-```bash
-type vscode-interactive
-```
-
-Then start a CPU interactive session with:
-
-```bash
-vscode-interactive
-```
-
-After the allocation starts, run this on the allocated compute node:
-
-```bash
-cd ~/bin
-./code tunnel --accept-server-license-terms
-```
-
-### GPU shortcut
-
-Create this file on `roihu-gpu`:
-
-```bash
-cat > ~/.bashrc.d/vscode-interactive.sh << 'EOF'
-# Slurm GPU interactive allocation launcher
-vscode-interactive() {
-    sinteractive --account project_xxxxxxxx
+cat > ~/.bashrc.d/vscode-interactive-gpu.sh << 'EOF'
+vscode-interactive-gpu() {
+    srun --account=project_xxxxxxxx \
+        --partition=gpuinteractive \
+        --gres=gpu:1 \
+        --time=12:00:00 \
+        --pty ~/bin/code tunnel --accept-server-license-terms
 }
 EOF
 ```
 
-Reload the shell configuration:
+Load the new functions into the active terminal session:
 
 ```bash
 source ~/.bashrc
-```
-
-Confirm the function is available:
-
-```bash
-type vscode-interactive
-```
-
-Then start a GPU interactive session with:
-
-```bash
-vscode-interactive
-```
-
-After the allocation starts, run this on the allocated compute node:
-
-```bash
-cd ~/bin
-./code tunnel --accept-server-license-terms
-```
-
-> The same function name can be used on both `roihu-cpu` and `roihu-gpu`. Each login environment has its own shell configuration.
-
-> Ensure `~/.bashrc` sources files from `~/.bashrc.d/`. If it does not, add this to `~/.bashrc`:
-
-```bash
-for file in ~/.bashrc.d/*.sh; do
-    [ -r "$file" ] && source "$file"
-done
 ```
 
 ---
 
 ## 7. Routine Workflow
 
-After the VS Code CLI has been installed, use one of the following workflows for each session.
-
-### CPU workflow
-
-On the local workstation:
+### CPU Session
 
 ```bash
 csc-ssh-keys
 ssh roihu-cpu
+source ~/.bashrc
+vscode-interactive-cpu
 ```
 
-On the Roihu CPU login node:
-
-```bash
-vscode-interactive
-```
-
-or:
-
-```bash
-sinteractive --account project_xxxxxxxx --cores 32
-```
-
-On the allocated CPU compute node:
-
-```bash
-cd ~/bin
-./code tunnel --accept-server-license-terms
-```
-
-In local VS Code:
-
-```text
-Remote Explorer → Tunnels → roihu-cpu-interactive
-```
-
-### GPU workflow
-
-On the local workstation:
+### GPU Session
 
 ```bash
 csc-ssh-keys
 ssh roihu-gpu
-```
-
-On the Roihu GPU login node:
-
-```bash
-vscode-interactive
-```
-
-or:
-
-```bash
-sinteractive --account project_xxxxxxxx
-```
-
-On the allocated GPU compute node:
-
-```bash
-cd ~/bin
-./code tunnel --accept-server-license-terms
-```
-
-In local VS Code:
-
-```text
-Remote Explorer → Tunnels → roihu-gpu-interactive
-```
- 
-### When finished
-
-Stop the tunnel:
-
-```text
-Ctrl-C
-```
-
-Then exit the allocation and login node:
-
-```bash
-exit
-exit
+source ~/.bashrc
+vscode-interactive-gpu
 ```
 
 ---
 
-## 8. Notes
+## 8. Technical Notes
 
-- Start the VS Code Tunnel only after entering the Slurm interactive node.
-- Use `roihu-cpu` for CPU interactive sessions.
-- Use `roihu-gpu` for GPU interactive sessions.
-- Keep the original SSH terminal open while using VS Code.
-- The tunnel stops when the Slurm allocation ends.
-- The CPU interactive partition supports up to 32 CPU cores and 64 GiB of memory.
-- The GPU interactive partition is intended for GPU work through `sinteractive`.
-- During the current Roihu pilot, GPU slices are not yet fully configured, so GPU interactive sessions may provide full GPUs.
-- Use batch jobs for long-running production workloads.
-- The `vscode-interactive` shell function can use the same name on CPU and GPU login nodes.
+- Allocation requests on the `gpuinteractive` partition provide full GH200 superchips until smaller GPU slices are configured.
+- Active tunnel connections require the persistent operation of the background SSH terminal session.
+- Production workloads exceeding 12 hours or requiring massive parallelisation must use standard batch queues instead of interactive partitions.
