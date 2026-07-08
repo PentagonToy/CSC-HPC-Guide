@@ -1,6 +1,6 @@
 # ML Environment Configuration
 
-Last updated: 3 July 2026
+Last updated: 8 July 2026
 
 ---
 
@@ -9,6 +9,8 @@ Last updated: 3 July 2026
 This folder contains configurations for deploying a reliable, high-performance runtime stack optimised for modern machine learning, statistics, and detailed chemical kinetics analysis on CSC supercomputers (**Puhti / Mahti / Roihu**). The setup focuses on a high-throughput **JAX + Equinox + ONNX** development ecosystem.
 
 Instead of deploying traditional Conda or pip environments directly on the parallel filesystem, we use **Tykky** to package the Python stack inside a single-file container image. This design reduces the Lustre parallel filesystem degradation caused by thousands of small metadata operations during Python package imports.
+
+Roihu requires separate Tykky environments for CPU and GPU nodes because Roihu CPU nodes use **x64 / amd64**, while Roihu GPU nodes use **ARM64 / aarch64**. A Tykky container built on one architecture should not be expected to run on the other.
 
 ### Why Tykky?
 
@@ -41,27 +43,62 @@ Dependency installation takes place inside the Python 3.12 environment created b
 
 ## Global Configuration
 
-Execute the following block to configure the project paths and environment name.
+Execute one of the following configuration blocks depending on the target node architecture.
+
+Use the **x64 configuration** for Roihu CPU nodes and other x86_64 systems such as Puhti and Mahti.
+
+Use the **ARM64 configuration** for Roihu GPU nodes.
+
+### x64 Configuration for CPU Nodes
+
+Run this block before building the CPU-node environment:
 
 ```bash
 # --- USER CONFIGURATION START ---
 export CSC_PROJECT="project_xxxxxxx"        # Your CSC project ID
 export PROJECT_USER_DIR="Harry"             # Your directory under the CSC project
 export ENV_NICKNAME="Dumbledore"            # Desired environment name
+export ENV_ARCH="x64"                       # x64 / amd64 environment for CPU nodes
 # --- USER CONFIGURATION END ---
 
 # Derived paths
 export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
 export PYTHON_ROOT="$BASE_SCRATCH/Python"
-export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12"
-export TMP_BUILD_DIR="$BASE_SCRATCH/.tykky_runtime"
+export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
+export TMP_BUILD_DIR="$BASE_SCRATCH/.tykky_runtime_$ENV_ARCH"
 
 # Initialise directories
 rm -rf "$ENV_PREFIX"
 rm -rf "$TMP_BUILD_DIR"
 mkdir -p "$PYTHON_ROOT/envs" "$TMP_BUILD_DIR"
 
-echo "Configuration loaded for $CSC_PROJECT."
+echo "x64 configuration loaded for $CSC_PROJECT."
+```
+
+### ARM64 Configuration for Roihu GPU Nodes
+
+Run this block before building the Roihu GPU-node environment:
+
+```bash
+# --- USER CONFIGURATION START ---
+export CSC_PROJECT="project_xxxxxxx"        # Your CSC project ID
+export PROJECT_USER_DIR="Harry"             # Your directory under the CSC project
+export ENV_NICKNAME="Dumbledore"            # Desired environment name
+export ENV_ARCH="arm64"                     # ARM64 / aarch64 environment for Roihu GPU nodes
+# --- USER CONFIGURATION END ---
+
+# Derived paths
+export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
+export PYTHON_ROOT="$BASE_SCRATCH/Python"
+export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
+export TMP_BUILD_DIR="$BASE_SCRATCH/.tykky_runtime_$ENV_ARCH"
+
+# Initialise directories
+rm -rf "$ENV_PREFIX"
+rm -rf "$TMP_BUILD_DIR"
+mkdir -p "$PYTHON_ROOT/envs" "$TMP_BUILD_DIR"
+
+echo "ARM64 configuration loaded for $CSC_PROJECT."
 ```
 
 The configuration variables represent:
@@ -70,6 +107,7 @@ The configuration variables represent:
 CSC_PROJECT       CSC project ID
 PROJECT_USER_DIR  Personal or shared directory under the CSC project
 ENV_NICKNAME      Name assigned to the Python environment
+ENV_ARCH          Target architecture: x64 or arm64
 ```
 
 For example:
@@ -78,12 +116,19 @@ For example:
 export CSC_PROJECT="project_xxxxxxx"
 export PROJECT_USER_DIR="Harry"
 export ENV_NICKNAME="Dumbledore"
+export ENV_ARCH="x64"
 ```
 
-The resulting base path is:
+The resulting x64 environment path is:
 
 ```text
-/scratch/project_xxxxxxx/Harry/Utilities
+/scratch/project_xxxxxxx/Harry/Utilities/Python/envs/Dumbledore-3.12-x64
+```
+
+The resulting ARM64 environment path is:
+
+```text
+/scratch/project_xxxxxxx/Harry/Utilities/Python/envs/Dumbledore-3.12-arm64
 ```
 
 `Harry` and `Dumbledore` are fictional placeholder values used in this public documentation. Replace them with your actual project directory and preferred environment name.
@@ -96,17 +141,19 @@ The resulting base path is:
 /scratch/
 └── $CSC_PROJECT/
     └── $PROJECT_USER_DIR/
-        └── Utilities/                       # $BASE_SCRATCH
-            ├── .tykky_runtime/              # $TMP_BUILD_DIR
+        └── Utilities/                             # $BASE_SCRATCH
+            ├── .tykky_runtime_x64/                # x64 temporary build directory
+            ├── .tykky_runtime_arm64/              # ARM64 temporary build directory
             ├── Python4ML.sh
-            └── Python/                      # $PYTHON_ROOT
+            └── Python/                            # $PYTHON_ROOT
                 ├── base4ML.yml
                 ├── extra4ML.sh
                 ├── update4ML.sh
                 ├── requirements.in
                 ├── requirements.txt
                 └── envs/
-                    └── $ENV_NICKNAME-3.12/  # $ENV_PREFIX
+                    ├── $ENV_NICKNAME-3.12-x64/    # x64 Tykky environment
+                    └── $ENV_NICKNAME-3.12-arm64/  # ARM64 Tykky environment
 ```
 
 ---
@@ -329,7 +376,13 @@ chmod +x extra4ML.sh
 
 ## 2. Build the Tykky Container
 
-Request an interactive compute node:
+Build the x64 environment from an x64 CPU node.
+
+Build the ARM64 environment from a Roihu GPU node.
+
+### 2.1 Request an x64 CPU Build Node
+
+Use this for the x64 environment:
 
 ```bash
 srun --account="$CSC_PROJECT" \
@@ -340,6 +393,20 @@ srun --account="$CSC_PROJECT" \
     --time=01:30:00 \
     --pty bash
 ```
+
+### 2.2 Request an ARM64 Roihu GPU Build Node
+
+Use this for the ARM64 environment:
+
+```bash
+sinteractive \
+    --account "$CSC_PROJECT" \
+    --gpu \
+    --cores 36 \
+    --time 01:30:00
+```
+
+### 2.3 Build the Environment
 
 Load Tykky:
 
@@ -406,18 +473,34 @@ ls -lh "$PYTHON_ROOT/requirements.txt"
 Create `$BASE_SCRATCH/Python4ML.sh`:
 
 ```bash
-cat <<EOF > "$BASE_SCRATCH/Python4ML.sh"
+cat <<'EOF' > "$BASE_SCRATCH/Python4ML.sh"
 #!/bin/bash
 
-# Environment path
-export ENV_PREFIX="$ENV_PREFIX"
+PYTHON_ROOT="/scratch/project_xxxxxxx/Harry/Utilities/Python"
+ENV_NICKNAME="Dumbledore"
 
-# Tykky executable path
-export PATH="\$ENV_PREFIX/bin:\$PATH"
+case "$(uname -m)" in
+    x86_64)
+        export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-x64"
+        ;;
+    aarch64)
+        export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-arm64"
+        ;;
+    *)
+        echo "Unsupported architecture: $(uname -m)"
+        return 1
+        ;;
+esac
 
-# Prefer the JAX GPU backend
+export PATH="$ENV_PREFIX/bin:$PATH"
 export JAX_PLATFORMS="gpu"
 EOF
+```
+
+Edit the loader and replace `project_xxxxxxx`, `Harry`, and `Dumbledore` with your actual values:
+
+```bash
+nano -m "$BASE_SCRATCH/Python4ML.sh"
 ```
 
 Make the loader executable:
@@ -432,9 +515,10 @@ Load the environment:
 source "$BASE_SCRATCH/Python4ML.sh"
 ```
 
-Confirm the Python version:
+Confirm the selected environment:
 
 ```bash
+echo "$ENV_PREFIX"
 python --version
 ```
 
@@ -448,16 +532,24 @@ export JAX_PLATFORMS="cpu"
 
 ## VS Code Kernel Registration
 
+The kernel should be registered separately on each architecture after loading the matching environment.
+
+Load the environment:
+
+```bash
+source "$BASE_SCRATCH/Python4ML.sh"
+```
+
 Create the kernel directory:
 
 ```bash
-mkdir -p "$HOME/.local/share/jupyter/kernels/$ENV_NICKNAME-ml"
+mkdir -p "$HOME/.local/share/jupyter/kernels/$ENV_NICKNAME-ml-$(uname -m)"
 ```
 
 Create `kernel.json`:
 
 ```bash
-cat <<EOF > "$HOME/.local/share/jupyter/kernels/$ENV_NICKNAME-ml/kernel.json"
+cat <<EOF > "$HOME/.local/share/jupyter/kernels/$ENV_NICKNAME-ml-$(uname -m)/kernel.json"
 {
   "argv": [
     "$ENV_PREFIX/bin/python",
@@ -466,7 +558,7 @@ cat <<EOF > "$HOME/.local/share/jupyter/kernels/$ENV_NICKNAME-ml/kernel.json"
     "-f",
     "{connection_file}"
   ],
-  "display_name": "Python 3.12 ($ENV_NICKNAME Tykky ML)",
+  "display_name": "Python 3.12 ($ENV_NICKNAME ML $(uname -m))",
   "language": "python",
   "metadata": {
     "debugger": true
@@ -478,13 +570,12 @@ EOF
 Confirm the registration:
 
 ```bash
-echo "Jupyter kernel '$ENV_NICKNAME-ml' has been registered."
+echo "Jupyter kernel '$ENV_NICKNAME-ml-$(uname -m)' has been registered."
 ```
 
 List the available kernels:
 
 ```bash
-source "$BASE_SCRATCH/Python4ML.sh"
 jupyter kernelspec list
 ```
 
@@ -683,7 +774,9 @@ chmod +x "$PYTHON_ROOT/update4ML.sh"
 
 ### 3. Apply the Update
 
-Request a compute node:
+Request the same architecture as the environment being updated.
+
+For x64:
 
 ```bash
 srun --account="$CSC_PROJECT" \
@@ -693,6 +786,16 @@ srun --account="$CSC_PROJECT" \
     --cpus-per-task=16 \
     --time=01:30:00 \
     --pty bash
+```
+
+For ARM64:
+
+```bash
+sinteractive \
+    --account "$CSC_PROJECT" \
+    --gpu \
+    --cores 36 \
+    --time 01:30:00
 ```
 
 Load Tykky:
@@ -746,7 +849,9 @@ rm -rf "$TMP_BUILD_DIR"
 mkdir -p "$TMP_BUILD_DIR"
 ```
 
-Request a compute node:
+Request the same architecture as the environment being rebuilt.
+
+For x64:
 
 ```bash
 srun --account="$CSC_PROJECT" \
@@ -756,6 +861,16 @@ srun --account="$CSC_PROJECT" \
     --cpus-per-task=16 \
     --time=01:30:00 \
     --pty bash
+```
+
+For ARM64:
+
+```bash
+sinteractive \
+    --account "$CSC_PROJECT" \
+    --gpu \
+    --cores 36 \
+    --time 01:30:00
 ```
 
 Load Tykky:
@@ -787,7 +902,7 @@ The rebuild installs the package set defined in `requirements.in` and records th
 
 ## Complete Clean Installation
 
-Run the global configuration block.
+Run the global configuration block for the target architecture.
 
 Remove the existing environment and temporary build data:
 
@@ -813,7 +928,9 @@ Make the installation script executable:
 chmod +x "$PYTHON_ROOT/extra4ML.sh"
 ```
 
-Request a compute node:
+Request the same architecture as the environment being installed.
+
+For x64:
 
 ```bash
 srun --account="$CSC_PROJECT" \
@@ -823,6 +940,16 @@ srun --account="$CSC_PROJECT" \
     --cpus-per-task=16 \
     --time=01:30:00 \
     --pty bash
+```
+
+For ARM64:
+
+```bash
+sinteractive \
+    --account "$CSC_PROJECT" \
+    --gpu \
+    --cores 36 \
+    --time 01:30:00
 ```
 
 Load Tykky:
@@ -848,19 +975,36 @@ conda-containerize new \
     "$PYTHON_ROOT/base4ML.yml"
 ```
 
-Create the loader:
+Create the architecture-aware loader:
 
 ```bash
-cat <<EOF > "$BASE_SCRATCH/Python4ML.sh"
+cat <<'EOF' > "$BASE_SCRATCH/Python4ML.sh"
 #!/bin/bash
 
-export ENV_PREFIX="$ENV_PREFIX"
-export PATH="\$ENV_PREFIX/bin:\$PATH"
+PYTHON_ROOT="/scratch/project_xxxxxxx/Harry/Utilities/Python"
+ENV_NICKNAME="Dumbledore"
+
+case "$(uname -m)" in
+    x86_64)
+        export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-x64"
+        ;;
+    aarch64)
+        export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-arm64"
+        ;;
+    *)
+        echo "Unsupported architecture: $(uname -m)"
+        return 1
+        ;;
+esac
+
+export PATH="$ENV_PREFIX/bin:$PATH"
 export JAX_PLATFORMS="gpu"
 EOF
 
 chmod +x "$BASE_SCRATCH/Python4ML.sh"
 ```
+
+Edit the loader and replace `project_xxxxxxx`, `Harry`, and `Dumbledore` with your actual values.
 
 Load and validate:
 
@@ -894,7 +1038,7 @@ rm -rf "$TMP_BUILD_DIR"
 mkdir -p "$TMP_BUILD_DIR"
 ```
 
-Run the normal Tykky build again.
+Run the normal Tykky build again on the matching architecture.
 
 ### `requirements.txt` Is Missing
 
@@ -929,11 +1073,24 @@ Remove or replace the package identified in the installation error and repeat th
 
 Run the global configuration block before starting the build.
 
-Temporary files and caches are redirected to:
+Temporary files and caches are redirected to architecture-specific scratch paths:
 
 ```text
-$BASE_SCRATCH/.tykky_runtime
+$BASE_SCRATCH/.tykky_runtime_x64
+$BASE_SCRATCH/.tykky_runtime_arm64
 ```
+
+### Container Architecture Mismatch
+
+If an environment built on an x64 node is used on a Roihu GPU node, execution may fail with an error similar to:
+
+```text
+the image's architecture (amd64) could not run on the host's (arm64)
+```
+
+Build and use a separate ARM64 environment on the Roihu GPU node.
+
+If an ARM64 environment is used on an x64 CPU node, build and use the x64 environment instead.
 
 ### JAX Reports No GPU
 
@@ -943,7 +1100,7 @@ For CPU execution:
 export JAX_PLATFORMS="cpu"
 ```
 
-For GPU execution, run inside a GPU allocation.
+For GPU execution, run inside a GPU allocation and use the ARM64 environment on Roihu GPU nodes.
 
 ### Import Errors After an Update
 
@@ -955,7 +1112,7 @@ rm -rf "$TMP_BUILD_DIR"
 mkdir -p "$TMP_BUILD_DIR"
 ```
 
-Then run the normal Tykky build.
+Then run the normal Tykky build on the matching architecture.
 
 ### Compiler Linkage Errors
 
@@ -974,6 +1131,11 @@ Load Tykky and repeat the build.
 ## Notes
 
 * The environment uses Python 3.12.
+* Roihu CPU nodes use x64 / amd64.
+* Roihu GPU nodes use ARM64 / aarch64.
+* Build a separate Tykky environment for each architecture that you need to use.
+* Do not expect an x64 Tykky container to run on Roihu GPU nodes.
+* Do not expect an ARM64 Tykky container to run on Roihu CPU nodes.
 * `Harry` and `Dumbledore` are fictional placeholder values used in the public documentation.
 * Replace `Harry` with the actual personal or shared directory under the CSC project.
 * Replace `Dumbledore` with the preferred environment nickname.
