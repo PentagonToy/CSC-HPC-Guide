@@ -1036,6 +1036,11 @@ export JUPYTER_KERNEL_DISPLAY="Python 3.12 ($ENV_NICKNAME ML $KERNEL_ARCH)"
 export JAX_PLATFORMS="gpu"
 EOF
 ```
+```bash
+chmod +x "$BASE_SCRATCH/Python4ML.sh"
+```
+
+
 
 Edit the loader and replace `project_xxxxxxx`, `Harry`, and `Dumbledore` with your actual values.
 
