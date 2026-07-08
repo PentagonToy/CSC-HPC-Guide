@@ -260,7 +260,6 @@ lightgbm
 linear-tree
 mlflow
 mlxtend
-obliquetree ; platform_machine == "x86_64"
 scikit-learn
 tensorboard
 wandb
