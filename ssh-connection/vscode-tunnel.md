@@ -517,17 +517,50 @@ Remote Explorer → Tunnels → roihu-gpu-int
 
 **For GPU notebook work:**
 
-After connecting to `roihu-gpu-int`, start the manual Jupyter server from the remote GPU terminal:
+After connecting to `roihu-gpu-int`, start the manual Jupyter server from the remote GPU terminal.
+
+First, create a helper function on `roihu-gpu`:
 
 ```bash
-source /scratch/project_xxxxxxxx/Harry/Utilities/Python4ML.sh
+cat > ~/.bashrc.d/open-jupyter.sh << 'EOF'
+# Start JupyterLab for VS Code GPU notebook workflow
+open-jupyter() {
+    source /scratch/project_xxxxxxxx/Harry/Utilities/Python4ML.sh
 
-python -m jupyter lab \
-    --no-browser \
-    --ip=127.0.0.1 \
-    --port=8899 \
-    --ServerApp.port_retries=0
+    python -m jupyter lab \
+        --no-browser \
+        --ip=127.0.0.1 \
+        --port=8899 \
+        --ServerApp.port_retries=0
+}
+EOF
 ```
+
+Reload the shell configuration:
+
+```bash
+source ~/.bashrc
+```
+
+Confirm the function is available:
+
+```bash
+type open-jupyter
+```
+
+Then start Jupyter from the remote GPU terminal:
+
+```bash
+open-jupyter
+```
+
+Jupyter will print a URL similar to:
+
+```text
+http://127.0.0.1:8899/lab?token=<token>
+```
+
+Leave this terminal running.
 
 Then forward port `8899` in VS Code and connect to the printed Jupyter URL through:
 
