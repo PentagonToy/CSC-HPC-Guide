@@ -535,6 +535,7 @@ uv pip check
 python -m pip list \
     --format=freeze \
     | grep -v '^smartredis==' \
+    | grep -v '^smartsim==' \
     | sort \
     > "$PYTHON_ROOT/requirements.txt"
 
@@ -1298,6 +1299,7 @@ uv pip check
 python -m pip list \
     --format=freeze \
     | grep -v '^smartredis==' \
+    | grep -v '^smartsim==' \
     | sort \
     > "$PYTHON_ROOT/requirements.txt"
 
@@ -1706,7 +1708,6 @@ numpy<2.0.0
 jax[cuda12]==0.6.2
 onnx==1.17.0
 protobuf==3.20.3
-smartsim==0.8.0
 ```
 
 Repeat the build after correcting the conflicting dependency.
