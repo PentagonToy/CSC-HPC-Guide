@@ -463,51 +463,29 @@ if [ ! -x "$ENV_PREFIX/bin/python" ]; then
 fi
 
 export PYTHON_PREFIX="$(python -c 'import sys; print(sys.prefix)')"
-
 export JULIA_ENV_RUNTIME="$BASE_SCRATCH/.julia_env_runtime_$ENV_ARCH"
 export JULIA_DEPOT_RUNTIME="$BASE_SCRATCH/.julia_depot_runtime_$ENV_ARCH"
 
-if [ ! -f "$JULIA_ENV_RUNTIME/Manifest.toml" ]; then
-    export JULIA_ENV_RUNTIME
-    export JULIA_DEPOT_RUNTIME
+export JULIA_ENV_RUNTIME
+export JULIA_DEPOT_RUNTIME
 
-    python - <<'PY'
+python - <<'PY'
 import os
 import shutil
 import sys
 from pathlib import Path
 
-prefix = Path(sys.prefix)
+source = Path(sys.prefix) / "julia_env"
+target = Path(os.environ["JULIA_ENV_RUNTIME"])
 
-env_source = prefix / "julia_env"
-env_target = Path(os.environ["JULIA_ENV_RUNTIME"])
+shutil.rmtree(target, ignore_errors=True)
+shutil.copytree(source, target)
 
-depot_source = prefix / "julia_depot"
-depot_target = Path(os.environ["JULIA_DEPOT_RUNTIME"])
-
-shutil.copytree(
-    env_source,
-    env_target,
-    dirs_exist_ok=True,
-)
-
-depot_target.mkdir(
+Path(os.environ["JULIA_DEPOT_RUNTIME"]).mkdir(
     parents=True,
     exist_ok=True,
 )
-
-for name in ("compiled", "scratchspaces", "logs"):
-    source = depot_source / name
-    target = depot_target / name
-
-    if source.exists():
-        shutil.copytree(
-            source,
-            target,
-            dirs_exist_ok=True,
-        )
 PY
-fi
 
 export PYTHON_JULIAPKG_PROJECT="$JULIA_ENV_RUNTIME"
 export JULIA_DEPOT_PATH="$JULIA_DEPOT_RUNTIME:$PYTHON_PREFIX/julia_depot"
