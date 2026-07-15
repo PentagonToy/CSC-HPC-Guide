@@ -463,16 +463,60 @@ if [ ! -x "$ENV_PREFIX/bin/python" ]; then
 fi
 
 export PYTHON_PREFIX="$(python -c 'import sys; print(sys.prefix)')"
-export JULIA_DEPOT_PATH="$PYTHON_PREFIX/julia_depot"
 
-# Use the Julia runtime and project already packaged inside Tykky.
-# Setting both variables disables JuliaPkg runtime resolution and lock creation.
-export PYTHON_JULIACALL_EXE="$PYTHON_PREFIX/julia_env/pyjuliapkg/install/bin/julia"
-export PYTHON_JULIACALL_PROJECT="$PYTHON_PREFIX/julia_env"
-export PYTHON_JULIACALL_PROJECT="$PYTHON_PREFIX/julia_env"
+export JULIA_ENV_RUNTIME="$BASE_SCRATCH/.julia_env_runtime_$ENV_ARCH"
+export JULIA_DEPOT_RUNTIME="$BASE_SCRATCH/.julia_depot_runtime_$ENV_ARCH"
+
+if [ ! -f "$JULIA_ENV_RUNTIME/Manifest.toml" ]; then
+    export JULIA_ENV_RUNTIME
+    export JULIA_DEPOT_RUNTIME
+
+    python - <<'PY'
+import os
+import shutil
+import sys
+from pathlib import Path
+
+prefix = Path(sys.prefix)
+
+env_source = prefix / "julia_env"
+env_target = Path(os.environ["JULIA_ENV_RUNTIME"])
+
+depot_source = prefix / "julia_depot"
+depot_target = Path(os.environ["JULIA_DEPOT_RUNTIME"])
+
+shutil.copytree(
+    env_source,
+    env_target,
+    dirs_exist_ok=True,
+)
+
+depot_target.mkdir(
+    parents=True,
+    exist_ok=True,
+)
+
+for name in ("compiled", "scratchspaces", "logs"):
+    source = depot_source / name
+    target = depot_target / name
+
+    if source.exists():
+        shutil.copytree(
+            source,
+            target,
+            dirs_exist_ok=True,
+        )
+PY
+fi
+
+export PYTHON_JULIAPKG_PROJECT="$JULIA_ENV_RUNTIME"
+export JULIA_DEPOT_PATH="$JULIA_DEPOT_RUNTIME:$PYTHON_PREFIX/julia_depot"
+
+export PYTHON_JULIAPKG_OFFLINE="yes"
 export PYTHON_JULIACALL_THREADS="${SLURM_CPUS_PER_TASK:-auto}"
-unset PYTHON_JULIAPKG_PROJECT
-unset PYTHON_JULIAPKG_OFFLINE
+
+unset PYTHON_JULIACALL_EXE
+unset PYTHON_JULIACALL_PROJECT
 
 export JUPYTER_KERNEL_NAME="$ENV_NICKNAME-ml-$KERNEL_ARCH"
 export JUPYTER_KERNEL_DISPLAY="Python 3.12 ($ENV_NICKNAME ML $KERNEL_ARCH)"
@@ -482,7 +526,10 @@ export JUPYTER_KERNEL_DIR="$XDG_DATA_HOME/jupyter/kernels/$JUPYTER_KERNEL_NAME"
 echo "ENV_ARCH=$ENV_ARCH"
 echo "ENV_PREFIX=$ENV_PREFIX"
 echo "JAX_PLATFORMS=$JAX_PLATFORMS"
+echo "PYTHON_JULIAPKG_PROJECT=$PYTHON_JULIAPKG_PROJECT"
+echo "JULIA_DEPOT_PATH=$JULIA_DEPOT_PATH"
 EOF
+
 chmod +x "$BASE_SCRATCH/Python4ML.sh"
 ```
 
