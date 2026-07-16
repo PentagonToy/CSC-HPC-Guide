@@ -778,48 +778,77 @@ set -e
 
 : "${CW_BUILD_TMPDIR:?CW_BUILD_TMPDIR is not set}"
 : "${PYTHON_ROOT:?PYTHON_ROOT is not set}"
+: "${ENV_ARCH:?ENV_ARCH is not set}"
 
 export TMPDIR="$CW_BUILD_TMPDIR"
 export PIP_CACHE_DIR="$CW_BUILD_TMPDIR/.pip_cache"
 export UV_CACHE_DIR="$CW_BUILD_TMPDIR/.uv_cache"
 export UV_CONCURRENT_DOWNLOADS=4
+
 mkdir -p "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
 
 python -m pip install --no-cache-dir uv
 
+# Install the complete constrained dependency set
 uv pip install \
     --link-mode=copy \
     --requirements "$PYTHON_ROOT/requirements.in"
 
+# Explicitly upgrade packages requested through smartsim-update
+UPDATE_REQUEST="$PYTHON_ROOT/.smartsim-update-$ENV_ARCH.txt"
+
+if [ -s "$UPDATE_REQUEST" ]; then
+    mapfile -t UPDATE_PACKAGES < "$UPDATE_REQUEST"
+
+    uv pip install \
+        --link-mode=copy \
+        --upgrade \
+        "${UPDATE_PACKAGES[@]}"
+fi
+
+# Install the patched SmartRedis Python client
 rm -rf "$CW_BUILD_TMPDIR/SmartRedis"
+
 git clone \
     https://github.com/boss507104/SmartRedis.git \
     "$CW_BUILD_TMPDIR/SmartRedis"
+
 cd "$CW_BUILD_TMPDIR/SmartRedis"
 
 grep -q '#include <cstdint>' src/cpp/tensorpack.cpp || \
     sed -i '30i #include <cstdint>' src/cpp/tensorpack.cpp
 
-OLD_CFLAGS="${CFLAGS-}"; OLD_CXXFLAGS="${CXXFLAGS-}"
-OLD_CPPFLAGS="${CPPFLAGS-}"; OLD_LDFLAGS="${LDFLAGS-}"
+OLD_CFLAGS="${CFLAGS-}"
+OLD_CXXFLAGS="${CXXFLAGS-}"
+OLD_CPPFLAGS="${CPPFLAGS-}"
+OLD_LDFLAGS="${LDFLAGS-}"
+
 unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
 
 python -m pip install --no-cache-dir .
 
-export CFLAGS="$OLD_CFLAGS" CXXFLAGS="$OLD_CXXFLAGS"
-export CPPFLAGS="$OLD_CPPFLAGS" LDFLAGS="$OLD_LDFLAGS"
+export CFLAGS="$OLD_CFLAGS"
+export CXXFLAGS="$OLD_CXXFLAGS"
+export CPPFLAGS="$OLD_CPPFLAGS"
+export LDFLAGS="$OLD_LDFLAGS"
 
-uv pip install --link-mode=copy smartsim==0.8.0
+# Install SmartSim only after SmartRedis
+uv pip install \
+    --link-mode=copy \
+    smartsim==0.8.0
 
+# Patch SmartSim architecture handling
 python - <<'PY'
 from pathlib import Path
 import json
 import smartsim
 
 smartsim_root = Path(smartsim.__file__).resolve().parent
+
 platform_file = smartsim_root / "_core" / "_install" / "platform.py"
 text = platform_file.read_text()
 text = text.replace('    AARCH64 = "aarch64"\n', '')
+
 if 'if string == "aarch64":' not in text:
     text = text.replace(
         '        return cls(string)\n',
@@ -828,64 +857,220 @@ if 'if string == "aarch64":' not in text:
         '        return cls(string)\n',
         1,
     )
+
 platform_file.write_text(text)
 
 config_dir = smartsim_root / "_core" / "_install" / "configs" / "mlpackages"
 config_file = config_dir / "linux-arm64-cpu.json"
+
 config = {
-    "platform": {"operating_system": "linux", "architecture": "arm64", "device": "cpu"},
-    "ml_packages": []
+    "platform": {
+        "operating_system": "linux",
+        "architecture": "arm64",
+        "device": "cpu",
+    },
+    "ml_packages": [],
 }
+
 config_file.write_text(json.dumps(config, indent=4) + "\n")
 PY
 
+# Rebuild the Redis-only SmartSim database executable
 export USE_SYSTEMD=no
-env CFLAGS="-Wno-incompatible-pointer-types" \
-    CXXFLAGS="-Wno-incompatible-pointer-types" \
-    USE_SYSTEMD=no smart clobber
 
-env CFLAGS="-Wno-incompatible-pointer-types" \
+env \
+    CFLAGS="-Wno-incompatible-pointer-types" \
     CXXFLAGS="-Wno-incompatible-pointer-types" \
     USE_SYSTEMD=no \
-    smart build --device cpu --skip-backends --skip-python-packages
+    smart clobber
 
+env \
+    CFLAGS="-Wno-incompatible-pointer-types" \
+    CXXFLAGS="-Wno-incompatible-pointer-types" \
+    USE_SYSTEMD=no \
+    smart build \
+        --device cpu \
+        --skip-backends \
+        --skip-python-packages
+
+# Restore the constrained dependency set after smart build
 uv pip install \
     --link-mode=copy \
     --requirements "$PYTHON_ROOT/requirements.in"
 
 uv pip check
 
+# Record the installed package state
 python -m pip list --format=freeze \
     | grep -v '^smartredis==' \
     | grep -v '^smartsim==' \
     | sort \
-    > "$PYTHON_ROOT/requirements.txt"
+    > "$PYTHON_ROOT/requirements-$ENV_ARCH.txt"
 
+rm -f "$UPDATE_REQUEST"
 rm -rf "$CW_BUILD_TMPDIR/SmartRedis"
 rm -rf "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
 EOF
+
 chmod +x "$PYTHON_ROOT/update4SmartSim.sh"
+```
+
+Create the smartsim-update command:
+
+```bash
+mkdir -p "$HOME/bin"
+
+cat <<'EOF' > "$HOME/bin/smartsim-update"
+#!/bin/bash -l
+set -e
+
+if [ "$#" -eq 0 ]; then
+    echo "Usage: smartsim-update <package> [package ...]"
+    exit 1
+fi
+
+if [ -z "${SLURM_JOB_ID:-}" ]; then
+    echo "Run smartsim-update inside a matching Slurm compute-node allocation."
+    exit 1
+fi
+
+# --- USER CONFIGURATION START ---
+export CSC_PROJECT="project_xxxxxxx"
+export PROJECT_USER_DIR="Harry"
+export ENV_NICKNAME="Dumbledore"
+# --- USER CONFIGURATION END ---
+
+export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
+export PYTHON_ROOT="$BASE_SCRATCH/Python"
+
+case "$(uname -m)" in
+    x86_64)
+        export ENV_ARCH="x64"
+        ;;
+    aarch64)
+        export ENV_ARCH="arm64"
+        ;;
+    *)
+        echo "Unsupported architecture: $(uname -m)"
+        exit 1
+        ;;
+esac
+
+export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.11-$ENV_ARCH"
+export TMP_BUILD_DIR="$BASE_SCRATCH/.tykky_runtime_smartsim_$ENV_ARCH"
+export UPDATE_REQUEST="$PYTHON_ROOT/.smartsim-update-$ENV_ARCH.txt"
+
+if [ ! -d "$ENV_PREFIX" ]; then
+    echo "Environment not found:"
+    echo "$ENV_PREFIX"
+    exit 1
+fi
+
+if [ ! -f "$PYTHON_ROOT/requirements.in" ]; then
+    echo "requirements.in not found:"
+    echo "$PYTHON_ROOT/requirements.in"
+    exit 1
+fi
+
+for package in "$@"; do
+    package_name="$(
+        printf '%s\n' "$package" |
+        sed -E 's/\[.*//; s/[<>=!~].*//'
+    )"
+
+    case "$package_name" in
+        smartsim|smartredis)
+            echo "$package_name is managed separately and must not be added to requirements.in."
+            exit 1
+            ;;
+    esac
+done
+
+printf '%s\n' "$@" > "$UPDATE_REQUEST"
+
+python - "$PYTHON_ROOT/requirements.in" "$@" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+requirements_file = Path(sys.argv[1])
+requested = sys.argv[2:]
+lines = requirements_file.read_text().splitlines()
+
+def package_name(spec):
+    return re.split(r"[\[<>=!~]", spec, maxsplit=1)[0].strip().lower()
+
+for spec in requested:
+    name = package_name(spec)
+    replaced = False
+
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+
+        if not stripped or stripped.startswith("#") or " @ " in stripped:
+            continue
+
+        if package_name(stripped) == name:
+            lines[index] = spec
+            replaced = True
+            print(f"Updated requirement: {spec}")
+            break
+
+    if not replaced:
+        lines.append(spec)
+        print(f"Added requirement: {spec}")
+
+requirements_file.write_text("\n".join(lines) + "\n")
+PY
+
+module purge
+module load tykky
+
+export TMPDIR="$TMP_BUILD_DIR"
+export CW_BUILD_TMPDIR="$TMP_BUILD_DIR"
+
+mkdir -p "$TMP_BUILD_DIR"
+
+echo
+echo "Architecture: $ENV_ARCH"
+echo "Environment:  $ENV_PREFIX"
+echo "Packages:     $*"
+echo
+
+conda-containerize update \
+    --post-install "$PYTHON_ROOT/update4SmartSim.sh" \
+    "$ENV_PREFIX"
+
+echo
+echo "Update completed."
+echo "Recorded packages:"
+echo "$PYTHON_ROOT/requirements-$ENV_ARCH.txt"
+EOF
+
+chmod +x "$HOME/bin/smartsim-update"
+```
+
+```bash
+grep -qxF 'export PATH="$HOME/bin:$PATH"' ~/.bashrc || \
+    echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
+
+source ~/.bashrc
 ```
 
 Request the **same architecture** node (Section 4), load Tykky, and apply:
 
 ```bash
-module purge
-module load tykky
-export TMPDIR="$TMP_BUILD_DIR"
-export CW_BUILD_TMPDIR="$TMP_BUILD_DIR"
-mkdir -p "$TMP_BUILD_DIR"
-
-conda-containerize update \
-    --post-install "$PYTHON_ROOT/update4SmartSim.sh" \
-    "$ENV_PREFIX"
+smartsim-update tensorflow
+smartsim-update "tensorflow>=2.20"
+smartsim-update shap optuna-dashboard
+smartsim-update scipy
 ```
 
 Reload and check:
 
 ```bash
 source "$BASE_SCRATCH/Python4SmartSim.sh"
-python --version
+
 uv pip check
 ```
 
