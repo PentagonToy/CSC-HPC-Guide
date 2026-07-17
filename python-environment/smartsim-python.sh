@@ -1,17 +1,21 @@
 #!/bin/bash
 # smartsim-python.sh
 # Interactive installer for the SmartSim Tykky environment + native SmartRedis
-# library + smartsim-update command (Sections 0, 1, 3, 5, 6, 7, 11 only).
+# library + smartsim-update command + Jupyter kernel registration
+# (Sections 0, 1, 3, 5, 6, 7, 8, 11 only).
 # Intended location: /scratch/$CSC_PROJECT/$PROJECT_USER_DIR/smartsim-python.sh
 # Intended to be run directly on the LOGIN NODE, per explicit request.
 #
 # This script performs INSTALLATION ONLY. It intentionally skips:
-#   - Jupyter kernel registration     (guide Section 8)
 #   - Environment validation          (guide Section 9)
 #   - Dependency file workflow notes  (guide Section 10, doc only)
 #   - Rebuild / troubleshooting       (guide Sections 12-13)
 #   - Deployment track notes          (guide Section 14, doc only)
 # Those remain manual steps from the full guide if/when you need them.
+#
+# Run this once per architecture (once on a CPU/login node for x64, once
+# on a Roihu GPU node for arm64) to match the guide's per-architecture
+# build + native library + kernel registration flow.
 
 set -e
 
@@ -216,6 +220,23 @@ if [ "$ENV_ARCH" = "arm64" ] && [ "$HOST_ARCH" != "aarch64" ]; then
     echo
 fi
 
+if [ "$ENV_ARCH" = "x64" ] && [ "$HOST_ARCH" = "aarch64" ]; then
+    echo "WARNING: You selected cpu/x64, but this host reports architecture"
+    echo "         '$HOST_ARCH' (aarch64/ARM64), not x86_64."
+    echo
+    echo "Both the Tykky container and the native SmartRedis library are"
+    echo "built for whatever host they actually run on — building here"
+    echo "would produce ARM64 artefacts mislabelled as x64, which will"
+    echo "fail confusingly on a real x86_64 node later."
+    echo
+    read -p "Continue anyway? [y/N]: " CONFIRM_ARCH2
+    case "$CONFIRM_ARCH2" in
+        y|Y|yes|YES) ;;
+        *) echo "Aborted."; exit 1 ;;
+    esac
+    echo
+fi
+
 read -p "Proceed with installation using the values above? [y/N]: " CONFIRM_ALL
 case "$CONFIRM_ALL" in
     y|Y|yes|YES) ;;
@@ -226,15 +247,15 @@ echo
 # ------------------------------------------------------------------
 # Step 4: Write the shared identity file (guide Section 0)
 # ------------------------------------------------------------------
-echo "[1/9] Writing identity file..."
+echo "[1/10] Writing identity file..."
 
 mkdir -p "$HOME/.config/csc-hpc"
 
 if [ -f "$HOME/.config/csc-hpc/identity.sh" ]; then
     echo "      Identity file already exists — overwriting with the values"
     echo "      entered above. If you already set this up for the ML stack,"
-    echo "      make sure CSC_PROJECT/PROJECT_USER_DIR/ENV_NICKNAME still"
-    echo "      match what you intend to use there."
+    echo "      or for the OTHER architecture of this SmartSim stack, make"
+    echo "      sure CSC_PROJECT/PROJECT_USER_DIR/ENV_NICKNAME still match."
 fi
 
 cat <<EOF > "$HOME/.config/csc-hpc/identity.sh"
@@ -252,7 +273,7 @@ echo
 # ------------------------------------------------------------------
 # Step 5: Global Configuration (guide Section 1.1 / 1.2)
 # ------------------------------------------------------------------
-echo "[2/9] Setting up paths..."
+echo "[2/10] Setting up paths..."
 
 source "$HOME/.config/csc-hpc/identity.sh"
 
@@ -275,7 +296,7 @@ echo
 # ------------------------------------------------------------------
 # Step 6: Create configuration files (guide Section 3)
 # ------------------------------------------------------------------
-echo "[3/9] Creating configuration files..."
+echo "[3/10] Creating configuration files..."
 cd "$PYTHON_ROOT"
 
 cat <<'EOF' > "$PYTHON_ROOT/base4SmartSim.yml"
@@ -519,7 +540,7 @@ echo
 # ------------------------------------------------------------------
 # Step 7: Build the Tykky environment (guide Section 5, on login node)
 # ------------------------------------------------------------------
-echo "[4/9] Building the Tykky environment on the login node..."
+echo "[4/10] Building the Tykky environment on the login node..."
 echo "      (this installs a large scientific stack + SmartRedis + SmartSim"
 echo "       and can take a long time)"
 echo
@@ -547,7 +568,7 @@ echo
 # ------------------------------------------------------------------
 # Step 8: Build the native SmartRedis library (guide Section 6)
 # ------------------------------------------------------------------
-echo "[5/9] Loading compiler modules for the native SmartRedis build..."
+echo "[5/10] Loading compiler modules for the native SmartRedis build..."
 
 module purge
 module load "$GCC_MODULE"
@@ -559,7 +580,7 @@ fi
 echo "      Loaded: $GCC_MODULE, $CMAKE_MODULE"
 echo
 
-echo "[6/9] Building the native SmartRedis library..."
+echo "[6/10] Building the native SmartRedis library..."
 
 cd "$BASE_SCRATCH"
 
@@ -585,7 +606,7 @@ env \
     make lib-with-fortran
 
 echo
-echo "[7/9] Verifying the native SmartRedis library..."
+echo "[7/10] Verifying the native SmartRedis library..."
 
 find "$SMARTREDIS_DIR/install" -maxdepth 3 -type f | sort
 
@@ -614,7 +635,7 @@ echo
 # Step 9: Create the loader (guide Section 7), with the detected
 # lib/lib64 directory and the GCC module baked in.
 # ------------------------------------------------------------------
-echo "[8/9] Creating loader Python4SmartSim.sh and update tooling..."
+echo "[8/10] Creating loader Python4SmartSim.sh and update tooling..."
 
 cat <<EOF > "$BASE_SCRATCH/Python4SmartSim.sh"
 #!/bin/bash
@@ -962,6 +983,41 @@ grep -qxF 'export PATH="$HOME/bin:$PATH"' "$HOME/.bashrc" || \
 echo "      -> Added \$HOME/bin to PATH in ~/.bashrc (if not already present)"
 echo
 
+# ------------------------------------------------------------------
+# Step 10: Register the Jupyter kernel (guide Section 8)
+# ------------------------------------------------------------------
+echo "[9/10] Registering the Jupyter kernel for this architecture..."
+
+# Source the loader we just wrote — this is what derives
+# JUPYTER_KERNEL_DIR / JUPYTER_KERNEL_NAME / JUPYTER_KERNEL_DISPLAY /
+# ENV_PREFIX for the architecture we just built on THIS node.
+source "$BASE_SCRATCH/Python4SmartSim.sh"
+
+mkdir -p "$JUPYTER_KERNEL_DIR"
+
+cat <<EOF > "$JUPYTER_KERNEL_DIR/kernel.json"
+{
+  "argv": ["$ENV_PREFIX/bin/python", "-m", "ipykernel_launcher", "-f", "{connection_file}"],
+  "display_name": "$JUPYTER_KERNEL_DISPLAY",
+  "language": "python",
+  "metadata": { "debugger": true }
+}
+EOF
+
+echo "      -> $JUPYTER_KERNEL_DIR/kernel.json"
+echo "      Registered kernel: $JUPYTER_KERNEL_NAME"
+echo
+
+if command -v jupyter >/dev/null 2>&1; then
+    jupyter kernelspec list 2>/dev/null || true
+else
+    echo "      (jupyter CLI not on PATH in this shell — kernel.json was still"
+    echo "       written correctly; 'jupyter kernelspec list' will show it once"
+    echo "       run from inside the loaded environment.)"
+fi
+echo
+
+echo "[10/10] Installation complete."
 echo "=================================================================="
 echo " Installation complete."
 echo "=================================================================="
@@ -974,6 +1030,14 @@ echo "PATH, then update/add packages with, e.g.:"
 echo "    smartsim-update pydantic"
 echo "    smartsim-update \"tensorflow>=2.20\""
 echo
+echo "In VS Code, after registering, reload the remote window:"
+echo "    Command Palette -> Developer: Reload Window"
+echo
+echo "If you're setting up BOTH architectures, run this script again on"
+echo "the OTHER node type (CPU/login for x64, Roihu GPU for arm64) with"
+echo "the SAME identity values, to build/register that architecture's"
+echo "Tykky env, native SmartRedis library, and kernel too."
+echo
 echo "Note: if this native library was built on a different node type than"
 echo "you'll actually run solvers on (e.g. built here but used later on a"
 echo "different Roihu partition), re-check install/lib vs install/lib64"
@@ -981,7 +1045,6 @@ echo "and the GCC module — this loader currently assumes: $GCC_MODULE,"
 echo "install/$LIB_DIR."
 echo
 echo "Skipped (not part of installation — see the full guide if needed):"
-echo "  - Jupyter kernel registration     (guide Section 8)"
 echo "  - Environment validation          (guide Section 9)"
 echo "  - Dependency file workflow notes  (guide Section 10, doc only)"
 echo "  - Rebuild / troubleshooting       (guide Sections 12-13)"
