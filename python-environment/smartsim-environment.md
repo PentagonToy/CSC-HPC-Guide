@@ -2,6 +2,26 @@
 
 Last updated: 16 July 2026
 
+> [!TIP]
+> ## One-Command Installation
+>
+> You can install the complete Python environment for SmartSim using the `smartsim-python.sh` script included in this repository.
+>
+> Download or copy `smartsim-python.sh` to:
+>
+> ```text
+> /scratch/project_xxxxxxx/PROJECT_USER_DIR/
+> ```
+>
+> Then run:
+>
+> ```bash
+> chmod +x smartsim-python.sh
+> ./smartsim-python.sh
+> ```
+>
+> The script performs the complete installation automatically.
+
 ---
 
 ## Overview & Motivation
