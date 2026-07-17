@@ -2,6 +2,25 @@
 
 Last updated: 16 July 2026
 
+> [!TIP]
+> ## One-Command Installation
+>
+> You can install the complete Python environment for machine learning using the `ml-python.sh` script included in this repository.
+>
+> Download or copy `ml-python.sh` to:
+>
+> ```text
+> /scratch/project_xxxxxxx/PROJECT_USER_DIR/
+> ```
+>
+> Then run:
+>
+> ```bash
+> chmod +x ml-python.sh
+> ./ml-python.sh
+> ```
+>
+> The script performs the complete installation automatically.
 ---
 
 ## Overview & Motivation
