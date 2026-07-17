@@ -1,13 +1,14 @@
 #!/bin/bash
 # ml-python.sh
-# Interactive installer for the ML Tykky environment (Section 0, 1, 3, 5, 6 only).
+# Interactive installer for the ML Tykky environment + ml-update command
+# (Sections 0, 1, 3, 5, 6, 10 only).
 # Intended location: /scratch/$CSC_PROJECT/$PROJECT_USER_DIR/ml-python.sh
 # Intended to be run directly on the LOGIN NODE, per explicit request.
 #
 # This script performs INSTALLATION ONLY. It intentionally skips:
 #   - Jupyter kernel registration   (guide Section 7)
 #   - Environment validation        (guide Section 8)
-#   - ml-update setup               (guide Section 10)
+#   - Dependency file workflow notes (guide Section 9, doc only)
 #   - Rebuild / troubleshooting     (guide Sections 11-12)
 # Those remain manual steps from the full guide if/when you need them.
 
@@ -151,9 +152,16 @@ echo
 # ------------------------------------------------------------------
 # Step 3: Write the shared identity file (guide Section 0)
 # ------------------------------------------------------------------
-echo "[1/6] Writing identity file..."
+echo "[1/8] Writing identity file..."
 
 mkdir -p "$HOME/.config/csc-hpc"
+
+if [ -f "$HOME/.config/csc-hpc/identity.sh" ]; then
+    echo "      Identity file already exists — overwriting with the values"
+    echo "      entered above. If you already set this up for the SmartSim"
+    echo "      stack, make sure CSC_PROJECT/PROJECT_USER_DIR/ENV_NICKNAME"
+    echo "      still match what you intend to use there."
+fi
 
 cat <<EOF > "$HOME/.config/csc-hpc/identity.sh"
 # --- USER CONFIGURATION START ---
@@ -170,7 +178,7 @@ echo
 # ------------------------------------------------------------------
 # Step 4: Global Configuration (guide Section 1.1 / 1.2)
 # ------------------------------------------------------------------
-echo "[2/6] Setting up paths..."
+echo "[2/8] Setting up paths..."
 
 source "$HOME/.config/csc-hpc/identity.sh"
 
@@ -191,7 +199,7 @@ echo
 # ------------------------------------------------------------------
 # Step 5: Create configuration files (guide Section 3)
 # ------------------------------------------------------------------
-echo "[3/6] Creating configuration files..."
+echo "[3/8] Creating configuration files..."
 cd "$PYTHON_ROOT"
 
 cat <<'EOF' > "$PYTHON_ROOT/base4ML.yml"
@@ -404,7 +412,7 @@ echo
 # ------------------------------------------------------------------
 # Step 6: Build the Tykky environment (guide Section 5, on login node)
 # ------------------------------------------------------------------
-echo "[4/6] Building the Tykky environment on the login node..."
+echo "[4/8] Building the Tykky environment on the login node..."
 echo "      (this can take a long time — installing a large scientific stack + Julia)"
 echo
 
@@ -423,7 +431,7 @@ conda-containerize new \
     "$PYTHON_ROOT/base4ML.yml"
 
 echo
-echo "[5/6] Build finished. Checking output..."
+echo "      Build finished. Checking output..."
 ls -ld "$ENV_PREFIX"
 ls -lh "$PYTHON_ROOT/requirements-$ENV_ARCH.txt" 2>/dev/null || true
 ls -lh "$PYTHON_ROOT/julia-environment-$ENV_ARCH.txt" 2>/dev/null || true
@@ -432,7 +440,7 @@ echo
 # ------------------------------------------------------------------
 # Step 7: Create the loader (guide Section 6) so the env is usable
 # ------------------------------------------------------------------
-echo "[6/6] Creating loader Python4ML.sh..."
+echo "[5/8] Creating loader Python4ML.sh..."
 
 cat <<'EOF' > "$BASE_SCRATCH/Python4ML.sh"
 #!/bin/bash
@@ -517,10 +525,202 @@ echo "ENV_ARCH=$ENV_ARCH"
 echo "PYTHON_ROOT=$PYTHON_ROOT"
 echo "ENV_PREFIX=$ENV_PREFIX"
 echo "JAX_PLATFORMS=$JAX_PLATFORMS"
+echo "PYTHON_JULIAPKG_PROJECT=$PYTHON_JULIAPKG_PROJECT"
+echo "JULIA_DEPOT_PATH=$JULIA_DEPOT_PATH"
 EOF
 
 chmod +x "$BASE_SCRATCH/Python4ML.sh"
 echo "      -> $BASE_SCRATCH/Python4ML.sh"
+echo
+
+# ------------------------------------------------------------------
+# Step 8: Create update4ML.sh (guide Section 10, post-install script)
+# ------------------------------------------------------------------
+echo "[6/8] Creating update4ML.sh..."
+
+cat <<'EOF' > "$PYTHON_ROOT/update4ML.sh"
+#!/bin/bash
+set -e
+
+: "${CW_BUILD_TMPDIR:?CW_BUILD_TMPDIR is not set}"
+: "${PYTHON_ROOT:?PYTHON_ROOT is not set}"
+: "${ENV_ARCH:?ENV_ARCH is not set}"
+
+export TMPDIR="$CW_BUILD_TMPDIR"
+export PIP_CACHE_DIR="$CW_BUILD_TMPDIR/.pip_cache"
+export UV_CACHE_DIR="$CW_BUILD_TMPDIR/.uv_cache"
+export UV_LINK_MODE=copy
+export UV_CONCURRENT_DOWNLOADS=4
+
+mkdir -p "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
+
+PYTHON_PREFIX="$(python -c 'import sys; print(sys.prefix)')"
+
+export JULIA_DEPOT_PATH="$PYTHON_PREFIX/julia_depot"
+export PYTHON_JULIAPKG_PROJECT="$PYTHON_PREFIX/julia_env"
+
+python -m pip install --no-cache-dir uv
+
+# Install the complete direct dependency set
+uv pip install \
+    --requirements "$PYTHON_ROOT/requirements.in"
+
+# Explicitly upgrade the packages requested through ml-update
+UPDATE_REQUEST="$PYTHON_ROOT/.ml-update-$ENV_ARCH.txt"
+
+if [ -s "$UPDATE_REQUEST" ]; then
+    mapfile -t UPDATE_PACKAGES < "$UPDATE_REQUEST"
+
+    uv pip install \
+        --upgrade \
+        "${UPDATE_PACKAGES[@]}"
+fi
+
+# Keep the packaged Julia environment ready for PySR
+python - <<'PY'
+import juliapkg
+import pysr
+
+juliapkg.resolve()
+
+print(f"PySR version:     {pysr.__version__}")
+print(f"Julia executable: {juliapkg.executable()}")
+print(f"Julia project:    {juliapkg.project()}")
+PY
+
+python - <<'PY'
+import juliapkg
+import subprocess
+
+julia = juliapkg.executable()
+project = juliapkg.project()
+
+subprocess.run(
+    [
+        julia,
+        f"--project={project}",
+        "-e",
+        "using Pkg; Pkg.instantiate(); Pkg.precompile()",
+    ],
+    check=True,
+)
+PY
+
+python -m pip freeze > "$PYTHON_ROOT/requirements-$ENV_ARCH.txt"
+
+rm -f "$UPDATE_REQUEST"
+rm -rf "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
+EOF
+
+chmod +x "$PYTHON_ROOT/update4ML.sh"
+echo "      -> $PYTHON_ROOT/update4ML.sh"
+echo
+
+# ------------------------------------------------------------------
+# Step 9: Create the ml-update command (guide Section 10)
+# ------------------------------------------------------------------
+echo "[7/8] Creating ml-update command..."
+
+mkdir -p "$HOME/bin"
+
+cat <<'EOF' > "$HOME/bin/ml-update"
+#!/bin/bash -l
+set -e
+
+if [ "$#" -eq 0 ]; then
+    echo "Usage: ml-update <package> [package ...]"
+    exit 1
+fi
+
+if [ ! -f "$HOME/.config/csc-hpc/identity.sh" ]; then
+    echo "Identity file not found: $HOME/.config/csc-hpc/identity.sh"
+    echo "Run ml-python.sh (or Section 0 of the ML Environment guide) first."
+    exit 1
+fi
+
+source "$HOME/.config/csc-hpc/identity.sh"
+
+export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
+export PYTHON_BASE="$BASE_SCRATCH/Python"
+export PYTHON_ROOT="$PYTHON_BASE/PythonML"
+
+case "$(uname -m)" in
+    x86_64)
+        export ENV_ARCH="x64"
+        ;;
+    aarch64)
+        export ENV_ARCH="arm64"
+        ;;
+    *)
+        echo "Unsupported architecture: $(uname -m)"
+        exit 1
+        ;;
+esac
+
+export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
+export TMP_BUILD_DIR="$BASE_SCRATCH/.tykky_runtime_$ENV_ARCH"
+export UPDATE_REQUEST="$PYTHON_ROOT/.ml-update-$ENV_ARCH.txt"
+
+if [ ! -d "$ENV_PREFIX" ]; then
+    echo "Environment not found:"
+    echo "$ENV_PREFIX"
+    exit 1
+fi
+
+if [ ! -f "$PYTHON_ROOT/requirements.in" ]; then
+    echo "requirements.in not found:"
+    echo "$PYTHON_ROOT/requirements.in"
+    exit 1
+fi
+
+printf '%s\n' "$@" > "$UPDATE_REQUEST"
+
+for package in "$@"; do
+    PACKAGE_NAME="$(printf '%s\n' "$package" | sed -E 's/\[.*//; s/[<>=!~].*//')"
+
+    if grep -Eq "^${PACKAGE_NAME}(\[.*\])?([<>=!~].*)?$" "$PYTHON_ROOT/requirements.in"; then
+        sed -i -E \
+            "s|^${PACKAGE_NAME}(\[.*\])?([<>=!~].*)?$|${package}|" \
+            "$PYTHON_ROOT/requirements.in"
+
+        echo "Updated requirement: $package"
+    else
+        echo "$package" >> "$PYTHON_ROOT/requirements.in"
+        echo "Added requirement: $package"
+    fi
+done
+
+module purge
+module load tykky
+
+export TMPDIR="$TMP_BUILD_DIR"
+export CW_BUILD_TMPDIR="$TMP_BUILD_DIR"
+
+mkdir -p "$TMP_BUILD_DIR"
+
+echo
+echo "Architecture: $ENV_ARCH"
+echo "Environment:  $ENV_PREFIX"
+echo "Packages:     $*"
+echo
+
+conda-containerize update \
+    --post-install "$PYTHON_ROOT/update4ML.sh" \
+    "$ENV_PREFIX"
+
+echo
+echo "Update completed."
+echo "Recorded packages:"
+echo "$PYTHON_ROOT/requirements-$ENV_ARCH.txt"
+EOF
+
+chmod +x "$HOME/bin/ml-update"
+echo "      -> $HOME/bin/ml-update"
+
+grep -qxF 'export PATH="$HOME/bin:$PATH"' "$HOME/.bashrc" || \
+    echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.bashrc"
+
+echo "      -> Added \$HOME/bin to PATH in ~/.bashrc (if not already present)"
 echo
 
 echo "=================================================================="
@@ -530,8 +730,13 @@ echo
 echo "Load the environment with:"
 echo "    source \"$BASE_SCRATCH/Python4ML.sh\""
 echo
+echo "Reload your shell (or open a new one) so ml-update is on PATH,"
+echo "then update/add packages with, e.g.:"
+echo "    ml-update tensorflow"
+echo "    ml-update \"tensorflow>=2.20\""
+echo
 echo "Skipped (not part of installation — see the full guide if needed):"
-echo "  - Jupyter kernel registration   (guide Section 7)"
-echo "  - Environment validation        (guide Section 8)"
-echo "  - ml-update command setup       (guide Section 10)"
-echo "  - Rebuild / troubleshooting     (guide Sections 11-12)"
+echo "  - Jupyter kernel registration    (guide Section 7)"
+echo "  - Environment validation         (guide Section 8)"
+echo "  - Dependency file workflow notes (guide Section 9, doc only)"
+echo "  - Rebuild / troubleshooting      (guide Sections 11-12)"
