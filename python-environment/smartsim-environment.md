@@ -421,7 +421,7 @@ unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
 
 python -m pip install --no-cache-dir .
 
-export CFLAGS="$OLD_CFLAGS" CXXFLAGS="$OLD_CXXFLAGX"
+export CFLAGS="$OLD_CFLAGS" CXXFLAGS="$OLD_CXXFLAGS"
 export CPPFLAGS="$OLD_CPPFLAGS" LDFLAGS="$OLD_LDFLAGS"
 
 # --- SmartSim, installed only after SmartRedis (both architectures) ---
