@@ -16,6 +16,14 @@
 # Run this once per architecture (once on a CPU/login node for x64, once
 # on a Roihu GPU node for arm64) to match the guide's per-architecture
 # build + native library + kernel registration flow.
+#
+# Build flags note: SmartSim 0.8.0's `smart build` does not accept
+# --skip-backends / --skip-python-packages (these are not real flags for
+# this version). To build Redis + the RedisAI module (required by the
+# SmartSim Orchestrator) while excluding the TensorFlow and PyTorch
+# ML-execution backends, the correct flags are --no_tf --no_pt. ONNX is
+# off by default unless --onnx is explicitly passed, so it stays excluded
+# without any extra flag.
 
 set -e
 
@@ -501,7 +509,12 @@ config_file.write_text(json.dumps(config, indent=4) + "\n")
 print(f"Wrote SmartSim Linux ARM64 CPU config: {config_file}")
 PY
 
-# --- Build only the SmartSim database executable, no RedisAI / ML backends ---
+# --- Build Redis and RedisAI without ML runtime backends ---
+# SmartSim 0.8.0's `smart build` does not accept --skip-backends or
+# --skip-python-packages. The Orchestrator requires the RedisAI shared
+# object regardless of ML workflow, so it is always built; --no_tf and
+# --no_pt exclude the TensorFlow and PyTorch execution backends, and
+# ONNX stays excluded since it is off by default unless --onnx is passed.
 export USE_SYSTEMD=no
 
 env CFLAGS="-Wno-incompatible-pointer-types" \
@@ -512,7 +525,10 @@ env CFLAGS="-Wno-incompatible-pointer-types" \
 env CFLAGS="-Wno-incompatible-pointer-types" \
     CXXFLAGS="-Wno-incompatible-pointer-types" \
     USE_SYSTEMD=no \
-    smart build --device cpu --skip-backends --skip-python-packages
+    smart build \
+        --device cpu \
+        --no_tf \
+        --no_pt
 
 # Restore packages potentially disturbed by the SmartSim database build
 uv pip install \
@@ -804,7 +820,9 @@ config = {
 config_file.write_text(json.dumps(config, indent=4) + "\n")
 PY
 
-# Rebuild the Redis-only SmartSim database executable
+# Rebuild Redis and RedisAI without ML runtime backends
+# (see the matching comment in extra4SmartSim.sh for why --no_tf/--no_pt
+# are the correct flags for SmartSim 0.8.0, not --skip-backends)
 export USE_SYSTEMD=no
 
 env \
@@ -819,8 +837,8 @@ env \
     USE_SYSTEMD=no \
     smart build \
         --device cpu \
-        --skip-backends \
-        --skip-python-packages
+        --no_tf \
+        --no_pt
 
 # Restore the constrained dependency set after smart build
 uv pip install \
@@ -1037,6 +1055,12 @@ echo "If you're setting up BOTH architectures, run this script again on"
 echo "the OTHER node type (CPU/login for x64, Roihu GPU for arm64) with"
 echo "the SAME identity values, to build/register that architecture's"
 echo "Tykky env, native SmartRedis library, and kernel too."
+echo
+echo "Note: this build now compiles the RedisAI module (required by the"
+echo "SmartSim Orchestrator) with --no_tf --no_pt, excluding only the"
+echo "TensorFlow and PyTorch ML-execution backends. Missing"
+echo "TensorFlow/PyTorch in 'smart validate' output is expected; RedisAI"
+echo "itself IS present."
 echo
 echo "Note: if this native library was built on a different node type than"
 echo "you'll actually run solvers on (e.g. built here but used later on a"
