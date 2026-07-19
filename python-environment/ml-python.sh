@@ -323,7 +323,7 @@ tensorly
 dvc
 
 # --- Custom Utilities ---
-DataGraph @ git+https://github.com/boss507104/DataGraph.git#subdirectory=DataGraph
+DataGraph @ git+https://github.com/PentagonToy/DataGraph.git#subdirectory=DataGraph
 
 # --- Notebook Execution ---
 ipykernel
