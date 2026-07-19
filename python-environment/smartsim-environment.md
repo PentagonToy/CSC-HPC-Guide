@@ -18,16 +18,14 @@ Last updated: 19 July 2026
 
 This folder deploys **SmartSim 0.8.0 + SmartRedis 0.6.1** on CSC supercomputers (**Puhti / Mahti / Roihu**), coupling **JAX + Equinox** workflows with SmartSim/SmartRedis and OpenFOAM solvers.
 
-**Root cause of the earlier ARM64 build failure:** SmartSim 0.8.0 ships a platform config for `Darwin + ARM64 + CPU`, but has **no config at all for `Linux + ARM64 + CPU`**. Separately, its architecture-detection logic never maps Linux's `aarch64` string to the internal `arm64` label it expects. Together, this meant `smart build` on Roihu GPU nodes had no valid platform to build against, and the DLPack dependency (already correctly defined in SmartSim's own package list — `RedisAI/dlpack`, `v0.5_RAI`) never got resolved because its build path was never configured for Linux ARM64 in the first place. This is a **missing-config gap, not a fundamental incompatibility**.
+**Root cause of the earlier ARM64 build failure:** SmartSim 0.8.0 ships a platform config for `Darwin + ARM64 + CPU`, but has **no config at all for `Linux + ARM64 + CPU`**. Separately, its architecture-detection logic never maps Linux's `aarch64` string to the internal `arm64` label it expects. Together, this meant `smart build` on Roihu GPU nodes had no valid platform to build against, and the DLPack dependency (already correctly defined in SmartSim's own package list — `RedisAI/dlpack`, `v0.5_RAI`) never got resolved because its build path was never configured for Linux ARM64 in the first place. This was a **missing-config gap, not a fundamental incompatibility**.
 
 This pipeline patches both gaps directly:
 
 1. **String patch** — maps `aarch64` → `arm64` in SmartSim's architecture-detection code.
 2. **Missing config patch** — adds a `LinuxARM64CPU.json` platform file (modeled on the existing Darwin ARM64 CPU entry) that declares only `dlpack` as a required ML package, since Torch/TensorFlow/ONNX are skipped on both architectures anyway.
 
-With both patches applied, **`smart build` is attempted on both `x64` and `arm64`** — the Orchestrator (Redis + RedisAI module) is no longer architecture-restricted by design. TensorFlow, PyTorch, and ONNXRuntime model-execution backends remain disabled on both, via `--skip-torch --skip-tensorflow --skip-onnx` — only the RedisAI module itself is built, since the Orchestrator requires it to start. Model execution itself is never performed by RedisAI in this workflow regardless — inference runs in external Python/JAX worker processes, with SmartRedis carrying tensors, weights, metrics, and predictions.
-
-> **If `smart build` still fails on arm64 after these patches** (e.g. `dlpack.h` still missing after the DLPack clone step), the next diagnostic step is to inspect the actual fetch result and include paths under RedisAI's build tree on that node — see Section 13. Until confirmed working end-to-end on your system, treat a failed arm64 Orchestrator build as expected-possible and fall back to running the Orchestrator on x64 only, with arm64 as a SmartRedis-client + JAX worker connecting to it remotely (see Section 14).
+With both patches applied, **`smart build` runs on both `x64` and `arm64`** — the Orchestrator (Redis + RedisAI module) builds successfully on both architectures. TensorFlow, PyTorch, and ONNXRuntime model-execution backends remain disabled on both, via `--skip-torch --skip-tensorflow --skip-onnx` — only the RedisAI module itself is built, since the Orchestrator requires it to start. Model execution itself is never performed by RedisAI in this workflow regardless — inference runs in external Python/JAX worker processes, with SmartRedis carrying tensors, weights, metrics, and predictions.
 
 We use **Tykky** to package the whole Python stack into a single-file container image, avoiding Lustre metadata slowdowns from thousands of small file imports.
 
@@ -48,7 +46,7 @@ ONNX         1.17.0, optional tooling
 NumPy        < 2.0.0
 protobuf     3.20.3
 CMake        < 3.30.0
-RedisAI      attempted on BOTH x64 and arm64, via patched SmartSim platform config
+RedisAI      built on both x64 and arm64, via patched SmartSim platform config
 ```
 
 ```text
@@ -232,7 +230,7 @@ Move `envs/` as one piece. `$SMARTREDIS_DIR` never moves — verify with `source
 | pydantic | resolved | Typed config for producer/consumer/orchestration scripts |
 | loguru | resolved | Structured logging |
 | pyinstrument | resolved | Lightweight statistical profiler |
-| RedisAI module + DLPack | attempted on **both** architectures | Built via `smart build`, after patching SmartSim's Linux ARM64 platform config on arm64 |
+| RedisAI module + DLPack | built on **both** architectures | Built via `smart build`, after patching SmartSim's Linux ARM64 platform config on arm64 |
 
 ---
 
@@ -384,7 +382,7 @@ EOF
 
 ### 3.3 `extra4SmartSim.sh` (post-install, runs *inside* the build)
 
-`smart build` now runs **on both architectures**. On arm64, a two-part patch is applied to the installed SmartSim package immediately before the build:
+`smart build` runs **on both architectures**. On arm64, a two-part patch is applied to the installed SmartSim package immediately before the build:
 
 1. **String patch** — `platform.py`'s architecture-parsing method never maps Linux's `aarch64` to the `arm64` label the rest of SmartSim expects internally.
 2. **Config patch** — adds `LinuxARM64CPU.json`, a platform file SmartSim doesn't ship (it only ships one for `Darwin + ARM64 + CPU`), declaring `dlpack` (`RedisAI/dlpack`, `v0.5_RAI` — already SmartSim's own correct source) as the only required ML package, since Torch/TensorFlow/ONNX are skipped via CLI flags anyway.
@@ -519,8 +517,6 @@ rm -rf "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
 EOF
 chmod +x "$PYTHON_ROOT/extra4SmartSim.sh"
 ```
-
-If `smart build` on arm64 still fails at the DLPack clone/compile step even with this patch applied, see Section 13 — the next step is inspecting the actual fetch result under RedisAI's build tree, not re-patching blindly.
 
 The `onnx==1.17.0` pin is for optional export/conversion tooling only.
 
@@ -792,14 +788,14 @@ print('Core SmartSim, ML, and scientific packages imported successfully.')
 uv pip check
 ```
 
-**On both architectures** — the Orchestrator is expected to build on each, so run:
+**On both architectures** — the Orchestrator builds on each, so run:
 
 ```bash
 python -c "from smartsim._core.config import CONFIG; print(CONFIG.database_exe)"
 smart validate --device cpu
 ```
 
-Missing ONNXRuntime/PyTorch/TensorFlow is expected on both; the RedisAI module itself should be present. If `smart validate` fails specifically on arm64, confirm the platform patch in Section 3.3 actually applied (check for `LinuxARM64CPU.json` under `smartsim/_core/_install/configs/mlpackages/`), then see Section 13.
+Missing ONNXRuntime/PyTorch/TensorFlow is expected on both; the RedisAI module itself is present. If `smart validate` fails specifically on arm64, confirm the platform patch in Section 3.3 actually applied (check for `LinuxARM64CPU.json` under `smartsim/_core/_install/configs/mlpackages/`), then see Section 13.
 
 Native library check (both architectures):
 
@@ -809,8 +805,6 @@ test -f "$SMARTREDIS_DIR/install/lib64/libsmartredis-fortran.so" \
     && echo "SmartRedis Fortran library is available."
 ldd "$SMARTREDIS_DIR/install/lib64/libsmartredis-fortran.so"
 ```
-
-If arm64's Orchestrator build did *not* succeed on your system, fall back to the client-only pattern in Section 14 and skip `smart validate` there.
 
 ---
 
@@ -1109,7 +1103,7 @@ Rebuild per Section 12.
 
 **SmartRedis PyPI source build fails on ARM64** — usually means `smartsim==0.8.0` got installed too early; keep it out of `requirements.in`.
 
-**`smart build --device cpu` reports no valid device choices on arm64, or fails again on `dlpack/dlpack.h: No such file or directory`** — first confirm the patch in Section 3.3 actually ran: check whether `smartsim/_core/_install/configs/mlpackages/LinuxARM64CPU.json` exists inside the built environment, and whether `platform.py`'s `aarch64`→`arm64` mapping is present. If both patches are confirmed present and the build still fails at the DLPack step, the next step is inspecting the actual DLPack fetch result and include paths under RedisAI's build tree on that node (`find <RedisAI build dir> -iname 'dlpack*'`) rather than re-patching blindly — the failure mode at that point is a fetch/path problem, not the missing-config problem this patch fixes. As a fallback, build the Orchestrator on x64 only and run arm64 as a SmartRedis-client + JAX worker (Section 14).
+**`smart build --device cpu` reports no valid device choices on arm64, or fails on `dlpack/dlpack.h: No such file or directory`** — first confirm the patch in Section 3.3 actually ran: check whether `smartsim/_core/_install/configs/mlpackages/LinuxARM64CPU.json` exists inside the built environment, and whether `platform.py`'s `aarch64`→`arm64` mapping is present. If both patches are confirmed present and the build still fails at the DLPack step, inspect the actual DLPack fetch result and include paths under RedisAI's build tree on that node (`find <RedisAI build dir> -iname 'dlpack*'`).
 
 **`jax2onnx` reports an incompatible ONNX version** — keep `onnx==1.17.0`; make sure `extra4SmartSim.sh` reapplies `requirements.in` + `uv pip check` after any build step.
 
@@ -1125,8 +1119,6 @@ Rebuild per Section 12.
 
 **SmartSim can't locate the database executable** — rebuild: `smart clobber && smart build --device cpu --skip-torch --skip-tensorflow --skip-onnx`, then restore packages and `uv pip check`.
 
-**arm64 client can't reach a remote x64 Orchestrator** (only relevant if you've fallen back to the Section 14 client-only pattern) — confirm the x64 Orchestrator is actually running and reachable on the network path between the two node types; check the address/port passed to `smartredis.Client`.
-
 **SmartRedis native library not found** — check `$LD_LIBRARY_PATH`, confirm files under `install/lib64` (or `lib`), re-source the loader.
 
 **SmartRedis compiler errors** — check `module list`, `gcc/gfortran/cmake --version`; confirm the `<cstdint>` patch is present; `rm -rf build install` and rebuild (Section 6).
@@ -1139,43 +1131,41 @@ Rebuild per Section 12.
 
 ## 14. SmartSim Deployment Track
 
-With both patches applied (Section 3.3), the expected shape is a **local Orchestrator on each architecture**, since `smart build` is no longer restricted to x64.
-
-**If the arm64 Orchestrator build hasn't been confirmed working on your system yet**, use this fallback shape instead — x64 running the Orchestrator, arm64 as a remote client:
+With both patches applied (Section 3.3), each architecture runs its own local Orchestrator:
 
 ```text
 x64 CPU node                          arm64 GPU node
-└─ SmartSim Orchestrator              └─ SmartRedis client
-   (Redis + RedisAI module)              └─ JAX / Equinox training & inference
-   └─ tensor/weight/metric storage        └─ get_tensor() / put_tensor() over the network
+└─ SmartSim Orchestrator              └─ SmartSim Orchestrator
+   (Redis + RedisAI module)              (Redis + RedisAI module)
+   └─ tensor/weight/metric storage        └─ JAX / Equinox training & inference
+                                              + tensor/weight/metric storage
 ```
 
-The Orchestrator never executes the model — it's purely the exchange point. A GPU-side worker looks roughly like:
+The Orchestrator never executes the model — it's purely the exchange point. A worker process looks roughly like:
 
 ```python
 from smartredis import Client
 import jax.numpy as jnp
 
-client = Client(address="x64-node-address:6379", cluster=False)
+client = Client(address="localhost:6379", cluster=False)
 x = jnp.asarray(client.get_tensor("training_data"))
 result = jax_function(x)          # runs on the GPU
 client.put_tensor("result", result)
 ```
 
-Avoid calling `get_tensor`/`put_tensor` every training step for large datasets — network transfer between nodes dominates otherwise. Instead: pull the dataset (or a large chunk) once, keep it in memory for many training steps, and only write small results (metrics, checkpoints, predictions) back through SmartRedis.
+For workloads that split across node types (e.g. an x64 CPU node feeding data to a separate arm64 GPU node), address the remote Orchestrator's host instead of `localhost`, and avoid calling `get_tensor`/`put_tensor` every training step for large datasets — network transfer between nodes dominates otherwise. Instead: pull the dataset (or a large chunk) once, keep it in memory for many training steps, and only write small results (metrics, checkpoints, predictions) back through SmartRedis.
 
 Other typical workflows: launching OpenFOAM solvers + Python producers/consumers through Slurm; linking external C++/Fortran solvers against the native SmartRedis client; validating producer/consumer config with `pydantic`, logging with `loguru`, profiling with `pyinstrument`.
 
-RedisAI model execution (`set_model`, `run_model`) is not used in this workflow regardless of which shape applies — model computation happens in the JAX worker, not inside RedisAI. Full production architecture and Slurm templates: [SmartSim4CSC](https://github.com/boss507104/SmartSim4CSC).
+RedisAI model execution (`set_model`, `run_model`) is not used in this workflow — model computation happens in the JAX worker, not inside RedisAI. Full production architecture and Slurm templates: [SmartSim4CSC](https://github.com/boss507104/SmartSim4CSC).
 
 ---
 
 ## Notes
 
 * Python 3.11, built separately per architecture — never mix containers across architectures.
-* **RedisAI/the Orchestrator is now attempted on both x64 and arm64.** The earlier arm64 failure was traced to two missing/incorrect pieces in SmartSim 0.8.0 itself: no `Linux + ARM64 + CPU` platform config (only `Darwin + ARM64 + CPU` exists), and no mapping from Linux's `aarch64` string to the internal `arm64` label. Both are patched on the installed package in `extra4SmartSim.sh` / `update4SmartSim.sh`, arm64-only.
-* DLPack's source definition (`RedisAI/dlpack`, `v0.5_RAI`) was already correct in SmartSim 0.8.0 — the earlier `dlpack.h` fetch failure on arm64 was very likely a downstream symptom of the missing platform config, not a DLPack/RedisAI-on-ARM64 incompatibility.
-* If the patched build still fails on arm64, don't re-patch blindly — inspect the actual DLPack fetch result and include paths under RedisAI's build tree first (Section 13), and fall back to the client-only pattern (Section 14) if needed.
+* **RedisAI/the Orchestrator builds on both x64 and arm64.** The earlier arm64 failure was traced to two missing/incorrect pieces in SmartSim 0.8.0 itself: no `Linux + ARM64 + CPU` platform config (only `Darwin + ARM64 + CPU` exists), and no mapping from Linux's `aarch64` string to the internal `arm64` label. Both are patched on the installed package in `extra4SmartSim.sh` / `update4SmartSim.sh`, arm64-only.
+* DLPack's source definition (`RedisAI/dlpack`, `v0.5_RAI`) was already correct in SmartSim 0.8.0 — the earlier `dlpack.h` fetch failure on arm64 was a downstream symptom of the missing platform config, not a DLPack/RedisAI-on-ARM64 incompatibility.
 * Placeholders (`Harry`/`Dumbledore`/`project_xxxxxxx`) are set once in the identity file (Section 0) and shared with the ML stack if you have one.
 * `PYTHON_ROOT` (`PythonSmartSim/`) must stay separate from the ML stack (`PythonML/`) — pin conflicts.
 * `requirements.in` = direct deps, not SmartSim itself; `requirements-$ENV_ARCH.txt` = installed-state snapshot, not a lockfile.
