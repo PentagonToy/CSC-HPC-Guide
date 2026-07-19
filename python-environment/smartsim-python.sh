@@ -17,25 +17,22 @@
 # on a Roihu GPU node for arm64) to match the guide's per-architecture
 # build + native library + kernel registration flow.
 #
-# ARCHITECTURE SPLIT (as of this version):
-#   The Redis + RedisAI Orchestrator (`smart build`) is built ONLY on x64.
-#   RedisAI's dependency-fetch step for `dlpack.h` does not complete on
-#   Linux ARM64 in this pipeline (confirmed: outbound network access from
-#   the GPU node works fine — `curl`/`git ls-remote` both succeed — but no
-#   dlpack directory is ever created under RedisAI's build tree on arm64,
-#   and `make` then fails with "dlpack/dlpack.h: No such file or
-#   directory"). This looks like an architecture-detection gap inside
-#   RedisAI's own fetch script, separate from SmartSim's platform.py.
+# ARCHITECTURE SPLIT (current version):
+#   The Redis + RedisAI Orchestrator (`smart build`) is built on BOTH x64
+#   AND arm64. The earlier arm64 build failure was traced to two gaps in
+#   SmartSim 0.8.0 itself, not a fundamental RedisAI-on-ARM64 limitation:
+#     1. SmartSim ships a platform config for Darwin+ARM64+CPU, but none
+#        at all for Linux+ARM64+CPU.
+#     2. SmartSim's architecture-detection code never maps Linux's
+#        "aarch64" string to the internal "arm64" label it expects.
+#   Both gaps are patched on the installed SmartSim package, arm64 only,
+#   immediately after `smartsim==0.8.0` is installed and before
+#   `smart build` runs. DLPack's source definition (RedisAI/dlpack,
+#   v0.5_RAI) was already correct in SmartSim 0.8.0 — the dlpack.h fetch
+#   failure seen previously was a downstream symptom of the missing
+#   platform config, not a DLPack/ARM64 incompatibility.
 #
-#   Rather than patch RedisAI's fetch logic, arm64 environments are built
-#   as SmartRedis-client + JAX workers only: `smart build` is skipped
-#   entirely there, and the environment is expected to connect to a
-#   remote x64 Orchestrator over the network. The SmartSim platform.py /
-#   linux-arm64-cpu.json patch used in earlier versions of this script is
-#   REMOVED — its only purpose was making `smart build` accept arm64,
-#   which no longer runs on arm64 at all.
-#
-# Build flags note (x64 only, history kept for reference):
+# Build flags note (both architectures, history kept for reference):
 #   Attempt 1: --skip-backends --skip-python-packages   -> not real flags, rejected
 #   Attempt 2: --no_tf --no_pt                           -> not real flags, rejected
 #   Attempt 3 (current): --skip-torch --skip-tensorflow --skip-onnx
@@ -180,11 +177,10 @@ prompt_architecture
 
 echo
 if [ "$ENV_ARCH" = "arm64" ]; then
-    echo "NOTE: arm64 selected. This environment will be a SmartRedis-client +"
-    echo "JAX worker only — 'smart build' (Redis + RedisAI Orchestrator) will"
-    echo "NOT be run on this architecture. See the header comment in this"
-    echo "script for why. You'll need a separately built x64 environment"
-    echo "running the Orchestrator for this to connect to."
+    echo "NOTE: arm64 selected. This build will patch SmartSim's Linux ARM64"
+    echo "platform detection (see the header comment in this script), then"
+    echo "run 'smart build' to compile the full Redis + RedisAI Orchestrator"
+    echo "locally, same as on x64."
     echo
 fi
 
@@ -199,7 +195,7 @@ echo "ENV_NICKNAME      = $ENV_NICKNAME"
 echo "ENV_ARCH          = $ENV_ARCH"
 echo "TARGET_SYSTEM     = $TARGET_SYSTEM"
 if [ "$ENV_ARCH" = "arm64" ]; then
-    echo "Orchestrator build (smart build) = SKIPPED (client-only environment)"
+    echo "Orchestrator build (smart build) = YES (Redis + RedisAI module, with Linux ARM64 platform patch)"
 else
     echo "Orchestrator build (smart build) = YES (Redis + RedisAI module)"
 fi
@@ -318,7 +314,7 @@ echo "[2/10] Setting up paths..."
 
 source "$HOME/.config/csc-hpc/identity.sh"
 
-export ENV_ARCH="$ENV_ARCH" 
+export ENV_ARCH="$ENV_ARCH"
 
 export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
 export PYTHON_BASE="$BASE_SCRATCH/Python"
@@ -513,36 +509,72 @@ export CPPFLAGS="$OLD_CPPFLAGS" LDFLAGS="$OLD_LDFLAGS"
 # --- SmartSim, installed only after SmartRedis (both architectures) ---
 uv pip install --link-mode=copy smartsim==0.8.0
 
-# --- Build the Orchestrator (Redis + RedisAI) — x64 ONLY ---
-# SmartSim's RedisAI build chain does not fetch its dlpack dependency
-# correctly on Linux ARM64 in this pipeline (fatal error:
-# dlpack/dlpack.h: No such file or directory during `make`). Network
-# access from the arm64 build node was confirmed working separately, so
-# this is treated as an architecture-detection gap in RedisAI's own
-# dependency-fetch script, not a network issue. Rather than patch that,
-# x64 builds the full Orchestrator; arm64 stays client-only and connects
-# to a remote x64 Orchestrator over the network.
-if [ "$ENV_ARCH" = "x64" ]; then
-    export USE_SYSTEMD=no
+# --- Linux ARM64 platform patch — arm64 ONLY ---
+# SmartSim 0.8.0 ships a Darwin+ARM64+CPU platform config, but no
+# Linux+ARM64+CPU one, and never maps the "aarch64" string uname -m
+# reports on Linux to the internal "arm64" label it expects. Neither
+# gap is a fundamental RedisAI-on-ARM64 limitation — both are patched
+# here on the installed package, since SquashFS/Tykky images can't be
+# edited after the fact.
+if [ "$ENV_ARCH" = "arm64" ]; then
+    python - <<'PY'
+from pathlib import Path
+import smartsim._core._install.platform as platform_module
+import smartsim._core._install.mlpackages as mlpackages_module
 
-    env CFLAGS="-Wno-incompatible-pointer-types" \
-        CXXFLAGS="-Wno-incompatible-pointer-types" \
-        USE_SYSTEMD=no \
-        smart clobber
+platform_file = Path(platform_module.__file__)
+text = platform_file.read_text()
+old = '''        string = string.lower()
+        return cls(string)
+'''
+new = '''        string = string.lower()
+        if string == "aarch64":
+            string = "arm64"
+        return cls(string)
+'''
+if old in text:
+    platform_file.write_text(text.replace(old, new))
+    print(f"Patched aarch64->arm64 string mapping in: {platform_file}")
 
-    env CFLAGS="-Wno-incompatible-pointer-types" \
-        CXXFLAGS="-Wno-incompatible-pointer-types" \
-        USE_SYSTEMD=no \
-        smart build \
-            --device cpu \
-            --skip-torch \
-            --skip-tensorflow \
-            --skip-onnx
-else
-    echo "Skipping smart build (Orchestrator/RedisAI) on $ENV_ARCH."
-    echo "This environment is a SmartRedis client + JAX worker only,"
-    echo "and connects to an x64 SmartSim Orchestrator over the network."
+config_dir = Path(mlpackages_module.__file__).resolve().parent / "configs" / "mlpackages"
+config_file = config_dir / "LinuxARM64CPU.json"
+config_file.write_text("""{
+    "platform": {
+        "operating_system": "linux",
+        "architecture": "arm64",
+        "device": "cpu"
+    },
+    "ml_packages": [
+        {
+            "name": "dlpack",
+            "version": "v0.5_RAI",
+            "pip_index": "",
+            "python_packages": [],
+            "lib_source": "https://github.com/RedisAI/dlpack.git"
+        }
+    ]
+}
+""")
+print(f"Wrote Linux ARM64 CPU platform config: {config_file}")
+PY
 fi
+
+# --- Build the Orchestrator (Redis + RedisAI) — both architectures ---
+export USE_SYSTEMD=no
+
+env CFLAGS="-Wno-incompatible-pointer-types" \
+    CXXFLAGS="-Wno-incompatible-pointer-types" \
+    USE_SYSTEMD=no \
+    smart clobber
+
+env CFLAGS="-Wno-incompatible-pointer-types" \
+    CXXFLAGS="-Wno-incompatible-pointer-types" \
+    USE_SYSTEMD=no \
+    smart build \
+        --device cpu \
+        --skip-torch \
+        --skip-tensorflow \
+        --skip-onnx
 
 # Restore packages potentially disturbed by the build above
 uv pip install \
@@ -551,8 +583,8 @@ uv pip install \
 
 uv pip check
 
-# Record installed versions; SmartSim/SmartRedis are installed separately
-# and intentionally excluded from this replay file.
+# Record installed versions; SmartSim/SmartRedis excluded (installed
+# fresh from source every build, never replayed).
 python -m pip list --format=freeze \
     | grep -v '^smartredis==' \
     | grep -v '^smartsim==' \
@@ -571,12 +603,13 @@ echo
 # Step 7: Build the Tykky environment (guide Section 5, on login node)
 # ------------------------------------------------------------------
 echo "[4/10] Building the Tykky environment on the login node..."
-if [ "$ENV_ARCH" = "x64" ]; then
+if [ "$ENV_ARCH" = "arm64" ]; then
+    echo "      (this installs a large scientific stack + SmartRedis + SmartSim,"
+    echo "       patches SmartSim's Linux ARM64 platform detection, then builds"
+    echo "       the Redis/RedisAI Orchestrator — can take a long time)"
+else
     echo "      (this installs a large scientific stack + SmartRedis + SmartSim"
     echo "       + the Redis/RedisAI Orchestrator, and can take a long time)"
-else
-    echo "      (this installs a large scientific stack + SmartRedis + SmartSim;"
-    echo "       the Orchestrator build is skipped on $ENV_ARCH — see header note)"
 fi
 echo
 
@@ -604,7 +637,7 @@ echo
 # Step 8: Build the native SmartRedis library (guide Section 6)
 # ------------------------------------------------------------------
 # This is a separate CMake build unrelated to smart build/RedisAI, and
-# is run on BOTH architectures — it is unaffected by the ARM64 issue.
+# is run on BOTH architectures.
 echo "[5/10] Loading compiler modules for the native SmartRedis build..."
 
 module purge
@@ -730,12 +763,6 @@ echo "PYTHON_ROOT=\$PYTHON_ROOT"
 echo "ENV_PREFIX=\$ENV_PREFIX"
 echo "SMARTREDIS_DIR=\$SMARTREDIS_DIR"
 echo "JAX_PLATFORMS=\$JAX_PLATFORMS"
-
-if [ "\$ENV_ARCH" = "arm64" ]; then
-    echo "NOTE: This is a client-only SmartSim environment (no local"
-    echo "Orchestrator). Connect to a remote x64 Orchestrator via"
-    echo "smartredis.Client(address=..., cluster=False)."
-fi
 EOF
 
 chmod +x "$BASE_SCRATCH/Python4SmartSim.sh"
@@ -809,29 +836,66 @@ uv pip install \
     --link-mode=copy \
     smartsim==0.8.0
 
-# Rebuild the Orchestrator (Redis + RedisAI) — x64 ONLY.
-# See extra4SmartSim.sh for why this is skipped on arm64.
-if [ "$ENV_ARCH" = "x64" ]; then
-    export USE_SYSTEMD=no
+# Linux ARM64 platform patch — arm64 ONLY. See extra4SmartSim.sh for details.
+if [ "$ENV_ARCH" = "arm64" ]; then
+    python - <<'PY'
+from pathlib import Path
+import smartsim._core._install.platform as platform_module
+import smartsim._core._install.mlpackages as mlpackages_module
 
-    env \
-        CFLAGS="-Wno-incompatible-pointer-types" \
-        CXXFLAGS="-Wno-incompatible-pointer-types" \
-        USE_SYSTEMD=no \
-        smart clobber
+platform_file = Path(platform_module.__file__)
+text = platform_file.read_text()
+old = '''        string = string.lower()
+        return cls(string)
+'''
+new = '''        string = string.lower()
+        if string == "aarch64":
+            string = "arm64"
+        return cls(string)
+'''
+if old in text:
+    platform_file.write_text(text.replace(old, new))
 
-    env \
-        CFLAGS="-Wno-incompatible-pointer-types" \
-        CXXFLAGS="-Wno-incompatible-pointer-types" \
-        USE_SYSTEMD=no \
-        smart build \
-            --device cpu \
-            --skip-torch \
-            --skip-tensorflow \
-            --skip-onnx
-else
-    echo "Skipping smart build (Orchestrator/RedisAI) on $ENV_ARCH."
+config_dir = Path(mlpackages_module.__file__).resolve().parent / "configs" / "mlpackages"
+config_file = config_dir / "LinuxARM64CPU.json"
+config_file.write_text("""{
+    "platform": {
+        "operating_system": "linux",
+        "architecture": "arm64",
+        "device": "cpu"
+    },
+    "ml_packages": [
+        {
+            "name": "dlpack",
+            "version": "v0.5_RAI",
+            "pip_index": "",
+            "python_packages": [],
+            "lib_source": "https://github.com/RedisAI/dlpack.git"
+        }
+    ]
+}
+""")
+PY
 fi
+
+# Rebuild the Orchestrator (Redis + RedisAI) — both architectures.
+export USE_SYSTEMD=no
+
+env \
+    CFLAGS="-Wno-incompatible-pointer-types" \
+    CXXFLAGS="-Wno-incompatible-pointer-types" \
+    USE_SYSTEMD=no \
+    smart clobber
+
+env \
+    CFLAGS="-Wno-incompatible-pointer-types" \
+    CXXFLAGS="-Wno-incompatible-pointer-types" \
+    USE_SYSTEMD=no \
+    smart build \
+        --device cpu \
+        --skip-torch \
+        --skip-tensorflow \
+        --skip-onnx
 
 # Restore the constrained dependency set after the build step above
 uv pip install \
@@ -1041,23 +1105,23 @@ echo
 echo "In VS Code, after registering, reload the remote window:"
 echo "    Command Palette -> Developer: Reload Window"
 echo
-if [ "$ENV_ARCH" = "x64" ]; then
+if [ "$ENV_ARCH" = "arm64" ]; then
+    echo "Note: this arm64 build patched SmartSim's Linux ARM64 platform"
+    echo "detection (Darwin+ARM64+CPU config existed, Linux+ARM64+CPU did"
+    echo "not; the aarch64->arm64 string mapping was also missing), then"
+    echo "compiled Redis + the RedisAI module locally using --skip-torch"
+    echo "--skip-tensorflow --skip-onnx, same as x64. Missing"
+    echo "PyTorch/TensorFlow/ONNXRuntime in 'smart validate' output is"
+    echo "expected; RedisAI itself IS present."
+else
     echo "Note: this x64 build compiles Redis + the RedisAI module (required by"
     echo "the SmartSim Orchestrator) using --skip-torch --skip-tensorflow"
     echo "--skip-onnx, excluding all three ML-execution backends. Missing"
     echo "PyTorch/TensorFlow/ONNXRuntime in 'smart validate' output is"
     echo "expected; RedisAI itself IS present."
-else
-    echo "Note: this arm64 build is SmartRedis-client + JAX-worker only."
-    echo "'smart build' was NOT run here (RedisAI's dlpack fetch fails on"
-    echo "Linux ARM64 in this pipeline). There is no local Orchestrator —"
-    echo "connect this environment to a separately built x64 environment"
-    echo "running the Orchestrator, e.g.:"
-    echo "    from smartredis import Client"
-    echo "    client = Client(address=\"X64_HOST:6379\", cluster=False)"
 fi
 echo
-echo "If a future SmartSim patch renames the x64 build flags again, run"
+echo "If a future SmartSim patch renames the build flags again, run"
 echo "'smart build --help' inside the build environment to get the current"
 echo "ground truth, rather than trusting this script."
 echo
