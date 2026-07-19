@@ -306,7 +306,7 @@ sympy2jax
 tensorflow==2.18.1
 torch==2.7.1
 onnx
-onnxruntime==1.17.3
+onnxruntime
 tf2onnx
 skl2onnx
 
