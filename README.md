@@ -1,6 +1,10 @@
 # CSC HPC Guide
 
-**Last updated:** 3 July 2026
+**Last updated:** 20 July 2026
+**Written by:**
+Aalto University
+Department of Energy and Mechanical Engineering
+Energy Conversion and Systems Team
 
 ---
 
@@ -21,7 +25,6 @@ CSC-HPC-Guide/
 ├── rclone-mount-unmount/   # Cloud storage integration
 ├── ssh-connection/         # SSH, Certs, and VS Code Tunnels
 └── utilities/              # Helper scripts
-
 ```
 
 ---
@@ -41,22 +44,22 @@ CSC-HPC-Guide/
 
 ### 3. Python Environment Configuration
 
-Environments are packaged with **Tykky** to minimise small-file I/O overhead on Lustre parallel filesystems.
+The Python environments are packaged with **Tykky** to minimise small-file I/O overhead on Lustre parallel filesystems.
 
-#### Environment A: SmartSim (Python 3.11)
+#### Unified SmartSim and Machine-Learning Environment
 
 * **[SmartSim Environment Configuration Guide](https://www.google.com/search?q=python-environment/smartsim-environment.md)**
-* **Purpose:** SmartSim 0.8.0, SmartRedis 0.6.1, and coupled OpenFOAM workflows.
-* **Constraints:** NumPy < 2.0.0, Protobuf 3.20.3.
+* **Purpose:** SmartSim 0.8.0, SmartRedis 0.6.1-compatible, RedisAI, JAX, Equinox, TensorFlow, PyTorch, ONNX, PySR, and JuliaCall workflows.
+* **Python:** 3.12
+* **NumPy:** `>= 2.0`
+* **TensorFlow:** `2.18.1`
+* **PyTorch:** `2.7.1`
+* **Architecture support:** x86_64 and ARM64/aarch64
+* **RedisAI backends:** TensorFlow, ONNX Runtime, and LibTorch
 
-#### Environment B: Machine Learning (Python 3.12)
+This unified environment replaces the previously separate SmartSim and machine-learning environments. A standalone `PythonML` environment is not required when using this stack.
 
-* **[Machine Learning Environment Configuration Guide](https://www.google.com/search?q=python-environment/machine-learning-environment.md)**
-* **Purpose:** Modern ML/Scientific computing (JAX, Equinox, NumPy >= 2.0.0).
-* **Constraints:** General scientific research and kinetics workflows.
-
-> [!WARNING]
-> Do not merge these environments. Maintain separate stacks to avoid strict dependency and protobuf conflicts.
+SmartSim and SmartRedis are installed from the CSC-maintained `csc-develop` forks. The Tykky environment and native SmartRedis library must be built separately for each architecture.
 
 ---
 
@@ -67,8 +70,7 @@ Environments are packaged with **Tykky** to minimise small-file I/O overhead on 
 3. [VS Code Tunnel to an Interactive Compute Node](https://github.com/boss507104/CSC-HPC-Guide/blob/main/ssh-connection/vscode-tunnel.md)
 4. [rclone Mount and Unmount Guide](https://github.com/boss507104/CSC-HPC-Guide/blob/main/rclone-mount-unmount/rclone-mount-unmount.md)
 5. [File Transfer Best Practices](https://github.com/boss507104/CSC-HPC-Guide/blob/main/file-transfer/file-transfer.md)
-6. [SmartSim Python 3.11 Environment](https://github.com/boss507104/CSC-HPC-Guide/blob/main/python-environment/smartsim-environment.md)
-7. [Machine-Learning Python 3.12 Environment](https://github.com/boss507104/CSC-HPC-Guide/blob/main/python-environment/machine-learning-environment.md)
+6. [Unified SmartSim and Machine-Learning Environment](https://github.com/boss507104/CSC-HPC-Guide/blob/main/python-environment/smartsim-environment.md)
 
 ---
 
@@ -80,14 +82,13 @@ Environments are packaged with **Tykky** to minimise small-file I/O overhead on 
 | **Interactive Compute Nodes** | Compilation, package installation, notebooks, debugging, environment builds. |
 | **Batch Jobs** | Production simulations, large data processing, long-running workloads. |
 | **Project Scratch** | Active datasets, software environments, temporary build data. |
-| **Home Directory** | Only for lightweight configuration files (e.g., `.bashrc`). |
+| **Home Directory** | Only for lightweight configuration files, such as `.bashrc`. |
 
 ---
 
 ## System Compatibility
 
 * **Targets:** Roihu, Puhti, Mahti.
-* **Key Considerations:** Always use the specific module versions, Slurm partitions, and GPU hardware configured for your target cluster.
-* **Note:** Large builds (Tykky containerization, SmartRedis compilation) must be executed on **compute nodes** via interactive allocations to avoid resource contention on the shared login nodes.
-
-```
+* **Architectures:** x86_64 and ARM64/aarch64.
+* **Key Considerations:** Always use the specific module versions, Slurm partitions, compiler versions, and GPU hardware configured for your target cluster.
+* **Note:** Large builds, including Tykky containerization and SmartRedis compilation, must be executed on **compute nodes** through interactive allocations to avoid resource contention on shared login nodes.
