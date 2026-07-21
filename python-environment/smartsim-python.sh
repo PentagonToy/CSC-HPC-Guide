@@ -575,6 +575,35 @@ ls -lh "$PYTHON_ROOT/julia-environment-$ENV_ARCH.txt"
 echo
 
 # ------------------------------------------------------------------
+# 5b. Prepare writable PySR / Julia runtime once
+# ------------------------------------------------------------------
+echo "      Preparing writable PySR / Julia runtime..."
+
+PYTHON_PREFIX="$("$ENV_PREFIX/bin/python" -c 'import sys; print(sys.prefix)')"
+JULIA_ENV_SOURCE="$PYTHON_PREFIX/julia_env"
+JULIA_ENV_RUNTIME="$BASE_SCRATCH/.julia_env_runtime_$ENV_ARCH"
+JULIA_DEPOT_RUNTIME="$BASE_SCRATCH/.julia_depot_runtime_$ENV_ARCH"
+
+if [ ! -d "$JULIA_ENV_SOURCE" ]; then
+    echo "ERROR: Packaged Julia environment was not found:"
+    echo "       $JULIA_ENV_SOURCE"
+    exit 1
+fi
+
+rm -rf "$JULIA_ENV_RUNTIME"
+cp -a "$JULIA_ENV_SOURCE" "$JULIA_ENV_RUNTIME"
+mkdir -p "$JULIA_DEPOT_RUNTIME"
+
+cat <<EOF > "$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
+export SMARTSIM_GCC_MODULE="$GCC_MODULE"
+EOF
+chmod 600 "$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
+
+echo "      Julia environment: $JULIA_ENV_RUNTIME"
+echo "      Julia depot:       $JULIA_DEPOT_RUNTIME"
+echo
+
+# ------------------------------------------------------------------
 # 6. Native SmartRedis library
 # ------------------------------------------------------------------
 echo "[5/10] Loading native-build modules..."
@@ -641,13 +670,26 @@ echo "[8/10] Creating loader and update tooling..."
 
 cat <<'EOF' > "$BASE_SCRATCH/Python4SmartSim.sh"
 #!/bin/bash
+#
+# SmartSim Python environment loader
+#
+# Usage:
+#   source /scratch/<project>/<user>/Utilities/Python4SmartSim.sh
 
-if [ ! -f "$HOME/.config/csc-hpc/identity.sh" ]; then
-    echo "Identity file not found: $HOME/.config/csc-hpc/identity.sh"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    echo "This file must be sourced, not executed:"
+    echo "    source ${BASH_SOURCE[0]}"
+    exit 1
+fi
+
+IDENTITY_FILE="$HOME/.config/csc-hpc/identity.sh"
+
+if [ ! -f "$IDENTITY_FILE" ]; then
+    echo "Identity file not found: $IDENTITY_FILE"
     return 1
 fi
 
-source "$HOME/.config/csc-hpc/identity.sh"
+source "$IDENTITY_FILE"
 
 export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
 export PYTHON_BASE="$BASE_SCRATCH/Python"
@@ -673,61 +715,73 @@ esac
 export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
 export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
 
-case "${HOSTNAME:-}" in
-    *roihu*)
-        module load gcc/13.4.0
-        ;;
-    *mahti*)
-        module load gcc/13.1.0
-        ;;
-    *puhti*)
-        echo "Load the GCC module matching the Puhti SmartRedis native build."
-        ;;
-    *)
-        echo "Unrecognised host. Load the GCC module matching the native build."
-        ;;
-esac
-
-export PATH="$ENV_PREFIX/bin:$PATH"
-
 if [ ! -x "$ENV_PREFIX/bin/python" ]; then
-    echo "Environment not found for $ENV_ARCH: $ENV_PREFIX"
+    echo "Python environment not found:"
+    echo "    $ENV_PREFIX"
     return 1
 fi
 
-if [ -d "$SMARTREDIS_DIR/install/lib64" ]; then
-    SMARTREDIS_LIB_DIR="$SMARTREDIS_DIR/install/lib64"
-else
-    SMARTREDIS_LIB_DIR="$SMARTREDIS_DIR/install/lib"
+if [ ! -d "$SMARTREDIS_DIR/install" ]; then
+    echo "SmartRedis installation not found:"
+    echo "    $SMARTREDIS_DIR/install"
+    return 1
 fi
 
-export LD_LIBRARY_PATH="$SMARTREDIS_LIB_DIR:${LD_LIBRARY_PATH:-}"
-export CMAKE_PREFIX_PATH="$SMARTREDIS_DIR/install:${CMAKE_PREFIX_PATH:-}"
+RUNTIME_CONFIG="$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
+
+if [ -f "$RUNTIME_CONFIG" ]; then
+    source "$RUNTIME_CONFIG"
+fi
+
+if [ -n "${SMARTSIM_GCC_MODULE:-}" ] && command -v module >/dev/null 2>&1; then
+    module is-loaded "$SMARTSIM_GCC_MODULE" 2>/dev/null ||
+        module load "$SMARTSIM_GCC_MODULE"
+fi
+
+path_prepend() {
+    local variable_name="$1"
+    local directory="$2"
+    local current_value="${!variable_name-}"
+
+    case ":$current_value:" in
+        *":$directory:"*)
+            ;;
+        *)
+            printf -v "$variable_name" '%s' \
+                "$directory${current_value:+:$current_value}"
+            export "$variable_name"
+            ;;
+    esac
+}
+
+if [ -d "$SMARTREDIS_DIR/install/lib64" ]; then
+    export SMARTREDIS_LIB_DIR="$SMARTREDIS_DIR/install/lib64"
+elif [ -d "$SMARTREDIS_DIR/install/lib" ]; then
+    export SMARTREDIS_LIB_DIR="$SMARTREDIS_DIR/install/lib"
+else
+    echo "SmartRedis library directory not found."
+    return 1
+fi
+
+path_prepend PATH "$ENV_PREFIX/bin"
+path_prepend LD_LIBRARY_PATH "$SMARTREDIS_LIB_DIR"
+path_prepend CMAKE_PREFIX_PATH "$SMARTREDIS_DIR/install"
 
 export SMARTSIM_DB_FILE_PARSE_TRIALS=600
 
-# PySR / Julia runtime setup.
-export PYTHON_PREFIX="$(python -c 'import sys; print(sys.prefix)')"
+# PySR / Julia runtime paths.
+export PYTHON_PREFIX="$("$ENV_PREFIX/bin/python" -c 'import sys; print(sys.prefix)')"
 export JULIA_ENV_RUNTIME="$BASE_SCRATCH/.julia_env_runtime_$ENV_ARCH"
 export JULIA_DEPOT_RUNTIME="$BASE_SCRATCH/.julia_depot_runtime_$ENV_ARCH"
 
-python - <<'PY'
-import os
-import shutil
-import sys
-from pathlib import Path
+if [ ! -d "$JULIA_ENV_RUNTIME" ]; then
+    echo "Writable Julia environment not found:"
+    echo "    $JULIA_ENV_RUNTIME"
+    echo "Run the SmartSim installer again for $ENV_ARCH."
+    return 1
+fi
 
-source = Path(sys.prefix) / "julia_env"
-target = Path(os.environ["JULIA_ENV_RUNTIME"])
-
-shutil.rmtree(target, ignore_errors=True)
-shutil.copytree(source, target)
-
-Path(os.environ["JULIA_DEPOT_RUNTIME"]).mkdir(
-    parents=True,
-    exist_ok=True,
-)
-PY
+mkdir -p "$JULIA_DEPOT_RUNTIME"
 
 export PYTHON_JULIAPKG_PROJECT="$JULIA_ENV_RUNTIME"
 export JULIA_DEPOT_PATH="$JULIA_DEPOT_RUNTIME:$PYTHON_PREFIX/julia_depot"
@@ -739,16 +793,18 @@ unset PYTHON_JULIACALL_PROJECT
 
 export JUPYTER_KERNEL_NAME="$ENV_NICKNAME-smartsim-$KERNEL_ARCH"
 export JUPYTER_KERNEL_DISPLAY="Python 3.12 ($ENV_NICKNAME SmartSim $KERNEL_ARCH)"
-export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share/$KERNEL_ARCH}"
-export JUPYTER_KERNEL_DIR="$XDG_DATA_HOME/jupyter/kernels/$JUPYTER_KERNEL_NAME"
+export JUPYTER_KERNEL_DIR="$HOME/.local/share/jupyter/kernels/$JUPYTER_KERNEL_NAME"
 
-echo "ENV_ARCH=$ENV_ARCH"
-echo "PYTHON_ROOT=$PYTHON_ROOT"
-echo "ENV_PREFIX=$ENV_PREFIX"
-echo "SMARTREDIS_DIR=$SMARTREDIS_DIR"
-echo "JAX_PLATFORMS=$JAX_PLATFORMS"
-echo "PYTHON_JULIAPKG_PROJECT=$PYTHON_JULIAPKG_PROJECT"
-echo "JULIA_DEPOT_PATH=$JULIA_DEPOT_PATH"
+if [ "${SMARTSIM_ENV_QUIET:-0}" != "1" ]; then
+    echo "SmartSim Python environment loaded"
+    echo "ENV_ARCH=$ENV_ARCH"
+    echo "ENV_PREFIX=$ENV_PREFIX"
+    echo "SMARTREDIS_DIR=$SMARTREDIS_DIR"
+    echo "JAX_PLATFORMS=$JAX_PLATFORMS"
+    echo "PYTHON_JULIAPKG_PROJECT=$PYTHON_JULIAPKG_PROJECT"
+fi
+
+unset -f path_prepend
 EOF
 
 chmod +x "$BASE_SCRATCH/Python4SmartSim.sh"
@@ -991,20 +1047,39 @@ echo "[9/10] Registering the Jupyter kernel..."
 
 source "$BASE_SCRATCH/Python4SmartSim.sh"
 
+# ------------------------------------------------------------------
+# 10a. Kernel launcher wrapper
+# ------------------------------------------------------------------
+JUPYTER_KERNEL_LAUNCHER="$PYTHON_ROOT/jupyter-kernel-$ENV_ARCH.sh"
+
+cat <<EOF > "$JUPYTER_KERNEL_LAUNCHER"
+#!/bin/bash
+export SMARTSIM_ENV_QUIET=1
+source "$BASE_SCRATCH/Python4SmartSim.sh" || exit 1
+unset SMARTSIM_ENV_QUIET
+exec "$ENV_PREFIX/bin/python" -m ipykernel_launcher "\$@"
+EOF
+
+chmod +x "$JUPYTER_KERNEL_LAUNCHER"
+
+echo "      Created $JUPYTER_KERNEL_LAUNCHER"
+
+# ------------------------------------------------------------------
+# 10b. kernel.json using the launcher
+# ------------------------------------------------------------------
 mkdir -p "$JUPYTER_KERNEL_DIR"
 
 cat <<EOF > "$JUPYTER_KERNEL_DIR/kernel.json"
 {
-  "argv": ["$ENV_PREFIX/bin/python", "-m", "ipykernel_launcher", "-f", "{connection_file}"],
+  "argv": [
+    "$JUPYTER_KERNEL_LAUNCHER",
+    "-f",
+    "{connection_file}"
+  ],
   "display_name": "$JUPYTER_KERNEL_DISPLAY",
   "language": "python",
-  "metadata": { "debugger": true },
-  "env": {
-    "JAX_PLATFORMS": "$JAX_PLATFORMS",
-    "PYTHON_JULIAPKG_PROJECT": "$PYTHON_JULIAPKG_PROJECT",
-    "JULIA_DEPOT_PATH": "$JULIA_DEPOT_PATH",
-    "PYTHON_JULIAPKG_OFFLINE": "yes",
-    "PYTHON_JULIACALL_THREADS": "auto"
+  "metadata": {
+    "debugger": true
   }
 }
 EOF
