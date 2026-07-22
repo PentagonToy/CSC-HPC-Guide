@@ -11,7 +11,7 @@
 #   - x64:   Roihu CPU / Puhti / Mahti x86_64 node
 #   - arm64: Roihu GPU aarch64 node
 #
-# SmartRedis installs from v1.0.0-csc, while SmartSim installs from v1.0.2-csc.
+# SmartRedis installs from v1.0.0-csc, while SmartSim installs from v1.0.3-csc.
 # These forks already include Python 3.12 support, NumPy 2.x compatibility,
 # Linux ARM64 support, RedisAI TensorFlow/ONNX Runtime/LibTorch backends on
 # Linux ARM64, SmartRedis compiler/source fixes, direct JAX/Equinox
@@ -227,7 +227,7 @@ echo "TARGET_SYSTEM     = $TARGET_SYSTEM"
 echo "GCC_MODULE        = $GCC_MODULE"
 echo "CMAKE_MODULE      = $CMAKE_MODULE"
 echo "Python            = 3.12"
-echo "SmartSim release  = PentagonToy/SmartSim @ v1.0.2-csc"
+echo "SmartSim release  = PentagonToy/SmartSim @ v1.0.3-csc"
 echo "SmartRedis release= PentagonToy/SmartRedis @ v1.0.0-csc"
 echo "RedisAI backends  = TensorFlow + ONNX Runtime + LibTorch + JAX"
 if [ "$INSTALL_PYSR" = "yes" ]; then
@@ -561,7 +561,7 @@ uv pip install \
 
 uv pip install \
     --link-mode=copy \
-    "smartsim @ git+https://github.com/PentagonToy/SmartSim.git@v1.0.2-csc"
+    "smartsim @ git+https://github.com/PentagonToy/SmartSim.git@v1.0.3-csc"
 
 # Build Redis and all RedisAI backends on both architectures.
 export USE_SYSTEMD=no
@@ -990,7 +990,7 @@ uv pip install \
 
 uv pip install \
     --link-mode=copy \
-    "smartsim @ git+https://github.com/PentagonToy/SmartSim.git@v1.0.2-csc"
+    "smartsim @ git+https://github.com/PentagonToy/SmartSim.git@v1.0.3-csc"
 
 export USE_SYSTEMD=no
 
