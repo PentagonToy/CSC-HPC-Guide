@@ -1,10 +1,10 @@
 # CSC HPC Guide
 
-**Last updated:** 20 July 2026
+**Last updated:** 22 July 2026
 
-**Written by:**
-Aalto University
-Department of Energy and Mechanical Engineering
+**Revised by:**  
+Aalto University  
+Department of Energy and Mechanical Engineering  
 Energy Conversion and Systems Team
 
 ---
@@ -22,10 +22,10 @@ This repository provides a practical setup guide for using CSC high-performance 
 ```text
 CSC-HPC-Guide/
 ├── file-transfer/          # Data movement workflows
-├── python-environment/     # Tykky/SmartSim/ML environment builds
+├── python-environment/     # Tykky, SmartSim, and ML environment builds
 ├── rclone-mount-unmount/   # Cloud storage integration
-├── ssh-connection/         # SSH, Certs, and VS Code Tunnels
-└── utilities/              # Helper scripts
+├── ssh-connection/         # SSH certificates, connections, and VS Code tunnels
+└── useful-bash/            # Useful shell configuration and helper guides
 ```
 
 ---
@@ -34,14 +34,14 @@ CSC-HPC-Guide/
 
 ### 1. SSH & Connection
 
-* **[SSH Certificate](https://www.google.com/search?q=ssh-connection/ssh-certificate.md):** Foundation for all authentication.
-* **[SSH Connection](https://www.google.com/search?q=ssh-connection/ssh-connection.md):** Managing login node access.
-* **[VS Code Tunnel](https://www.google.com/search?q=ssh-connection/vscode-tunnel.md):** Remote development on interactive compute nodes.
+* **[SSH Certificate](ssh-connection/ssh-certificate.md):** Configure certificate-based authentication for CSC systems.
+* **[SSH Connection](ssh-connection/ssh-connection.md):** Manage connections to CSC login nodes.
+* **[VS Code Tunnel](ssh-connection/vscode-tunnel.md):** Develop remotely on interactive compute nodes.
 
 ### 2. Data & Storage
 
-* **[rclone Mount](https://www.google.com/search?q=rclone-mount-unmount/rclone-mount-unmount.md):** Mounting cloud-hosted datasets.
-* **[File Transfer](https://www.google.com/search?q=file-transfer/file-transfer.md):** Best practices for local <-> CSC data movement.
+* **[rclone Mount](rclone-mount-unmount/rclone-mount-unmount.md):** Mount cloud-hosted files and datasets.
+* **[File Transfer](file-transfer/file-transfer.md):** Transfer data between local systems and CSC storage.
 
 ### 3. Python Environment Configuration
 
@@ -52,7 +52,7 @@ The Python environments are packaged with **Tykky** to minimise small-file I/O o
 * **[SmartSim Environment Configuration Guide](python-environment/smartsim-environment.md)**
 * **Purpose:** SmartSim `1.0.3+csc`, SmartRedis `1.0.0+csc`, RedisAI, JAX, Equinox, TensorFlow, PyTorch, ONNX, PySR, and JuliaCall workflows.
 * **Python:** 3.12
-* **NumPy:** `>= 2.0`
+* **NumPy:** `>=2.0`
 * **TensorFlow:** `2.18.1`
 * **PyTorch:** `2.7.1`
 * **Architecture support:** x86_64 and ARM64/aarch64
@@ -60,7 +60,7 @@ The Python environments are packaged with **Tykky** to minimise small-file I/O o
 
 This unified environment replaces the previously separate SmartSim and machine-learning environments. A standalone `PythonML` environment is not required when using this stack.
 
-SmartSim and SmartRedis are installed from the CSC-maintained releases:
+SmartSim, SmartRedis, and RedisAI are installed from the CSC-maintained releases:
 
 * SmartSim: `v1.0.3-csc`
 * SmartRedis: `v1.0.0-csc`
@@ -68,34 +68,44 @@ SmartSim and SmartRedis are installed from the CSC-maintained releases:
 
 The Tykky environment and native SmartRedis library must be built separately for each architecture.
 
+The corresponding environment loader is available at:
+
+* **[smartsim-python.sh](python-environment/smartsim-python.sh)**
+
+### 4. Shell Utilities
+
+* **[Shell Autosuggestions](useful-bash/autosuggestion.md):** Configure command-line autosuggestions for interactive shell usage.
+
 ---
 
 ## Quick Start Links
 
-1. [SSH Certificate Configuration](https://github.com/boss507104/CSC-HPC-Guide/blob/main/ssh-connection/ssh-certificate.md)
-2. [SSH Connection to CSC Login Nodes](https://github.com/boss507104/CSC-HPC-Guide/blob/main/ssh-connection/ssh-connection.md)
-3. [VS Code Tunnel to an Interactive Compute Node](https://github.com/boss507104/CSC-HPC-Guide/blob/main/ssh-connection/vscode-tunnel.md)
-4. [rclone Mount and Unmount Guide](https://github.com/boss507104/CSC-HPC-Guide/blob/main/rclone-mount-unmount/rclone-mount-unmount.md)
-5. [File Transfer Best Practices](https://github.com/boss507104/CSC-HPC-Guide/blob/main/file-transfer/file-transfer.md)
-6. [Unified SmartSim and Machine-Learning Environment](https://github.com/boss507104/CSC-HPC-Guide/blob/main/python-environment/smartsim-environment.md)
+1. [SSH Certificate Configuration](ssh-connection/ssh-certificate.md)
+2. [SSH Connection to CSC Login Nodes](ssh-connection/ssh-connection.md)
+3. [VS Code Tunnel to an Interactive Compute Node](ssh-connection/vscode-tunnel.md)
+4. [rclone Mount and Unmount Guide](rclone-mount-unmount/rclone-mount-unmount.md)
+5. [File Transfer Best Practices](file-transfer/file-transfer.md)
+6. [Unified SmartSim and Machine-Learning Environment](python-environment/smartsim-environment.md)
+7. [SmartSim Environment Loader](python-environment/smartsim-python.sh)
+8. [Shell Autosuggestions](useful-bash/autosuggestion.md)
 
 ---
 
 ## Recommended Usage Principles
 
 | Resource | Best Practice |
-| --- | --- |
-| **Login Nodes** | SSH access, file management, job submission, lightweight editing. |
-| **Interactive Compute Nodes** | Compilation, package installation, notebooks, debugging, environment builds. |
-| **Batch Jobs** | Production simulations, large data processing, long-running workloads. |
-| **Project Scratch** | Active datasets, software environments, temporary build data. |
-| **Home Directory** | Only for lightweight configuration files, such as `.bashrc`. |
+|---|---|
+| **Login Nodes** | SSH access, file management, job submission, and lightweight editing. |
+| **Interactive Compute Nodes** | Compilation, package installation, notebooks, debugging, and environment builds. |
+| **Batch Jobs** | Production simulations, large-scale data processing, and long-running workloads. |
+| **Project Scratch** | Active datasets, software environments, and temporary build data. |
+| **Home Directory** | Lightweight configuration files such as `.bashrc`, `.zshrc`, and SSH settings. |
 
 ---
 
 ## System Compatibility
 
-* **Targets:** Roihu, Puhti, Mahti.
+* **Targets:** Roihu, Puhti, and Mahti.
 * **Architectures:** x86_64 and ARM64/aarch64.
-* **Key Considerations:** Always use the specific module versions, Slurm partitions, compiler versions, and GPU hardware configured for your target cluster.
-* **Note:** Large builds, including Tykky containerization and SmartRedis compilation, must be executed on **compute nodes** through interactive allocations to avoid resource contention on shared login nodes.
+* **Key considerations:** Use the module versions, Slurm partitions, compiler versions, and GPU hardware appropriate for the target cluster.
+* **Build policy:** Large builds, including Tykky containerisation and SmartRedis compilation, must be executed on **compute nodes** through interactive allocations to avoid resource contention on shared login nodes.
