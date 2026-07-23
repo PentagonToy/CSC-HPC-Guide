@@ -161,12 +161,12 @@ echo "--- Optional PySR / Julia toolchain ---"
 prompt_install_pysr
 
 # Roihu compiler and CUDA modules.
-GCC_MODULE="gcc/13.4.0"
-
 if [ "$ENV_ARCH" = "x64" ]; then
+    GCC_MODULE="gcc/13.4.0"
     CMAKE_MODULE="cmake/3.26.5"
     CUDA_MODULE=""
 else
+    GCC_MODULE="gcc/14.3.0"
     CMAKE_MODULE="cmake/3.31.11"
     CUDA_MODULE="cuda/12.9.1"
 fi
@@ -580,6 +580,8 @@ echo "[4/10] Building the Tykky environment..."
 
 module purge
 module load tykky
+module load "$GCC_MODULE"
+echo "      Loaded $GCC_MODULE"
 
 if [ -n "$CUDA_MODULE" ]; then
     module load "$CUDA_MODULE"

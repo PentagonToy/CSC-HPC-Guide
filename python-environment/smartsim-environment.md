@@ -555,6 +555,7 @@ If Section 1's variables aren't inherited, re-run the Global Configuration block
 ```bash
 module purge
 module load tykky
+module load "$GCC_MODULE"
 
 if [ -n "$CUDA_MODULE" ]; then
     module load "$CUDA_MODULE"
@@ -612,12 +613,12 @@ Build the other architecture separately (Section 1 + Section 4); its `INSTALL_PY
 Needed on **both** architectures for OpenFOAM/C++/Fortran linkage. The source now comes from the already-checked-out SmartSim-CSC monorepo, not a separate clone.
 
 ```bash
-GCC_MODULE="gcc/13.4.0"
-
 if [ "$ENV_ARCH" = "x64" ]; then
+    GCC_MODULE="gcc/13.4.0"
     CMAKE_MODULE="cmake/3.26.5"
     CUDA_MODULE=""
 else
+    GCC_MODULE="gcc/14.3.0"
     CMAKE_MODULE="cmake/3.31.11"
     CUDA_MODULE="cuda/12.9.1"
 fi
