@@ -7,15 +7,15 @@
 # Intended location:
 #   /scratch/$CSC_PROJECT/$PROJECT_USER_DIR/smartsim-python.sh
 #
-# Run once per architecture:
-#   - x64:   Roihu CPU / Puhti / Mahti x86_64 node
-#   - arm64: Roihu GPU aarch64 node
+# This installer targets CSC's Roihu supercomputer only.
 #
-# SmartRedis installs from v1.0.0-csc, while SmartSim installs from v1.0.3-csc.
-# These forks already include Python 3.12 support, NumPy 2.x compatibility,
-# Linux ARM64 support, RedisAI TensorFlow/ONNX Runtime/LibTorch backends on
-# Linux ARM64, SmartRedis compiler/source fixes, direct JAX/Equinox
-# registration, polymorphic JAX batch support, and ARM64 runtime assets.
+# The target profile is selected automatically from the current Roihu node:
+#   - x86_64  -> linux-x64-cpu
+#   - aarch64 -> linux-arm64-gpu
+#
+# SmartSim and SmartRedis are installed from the unified SmartSim-CSC
+# monorepo. The exact component versions, RedisAI backends, and platform
+# assets are defined by the pinned SmartSim-CSC ref and its stack.toml.
 #
 # No post-install source patching is performed.
 #
@@ -32,12 +32,12 @@
 set -e
 
 echo "=================================================================="
-echo " Unified ML + SmartSim Environment Installer"
+echo " Unified ML + SmartSim Environment Installer (Roihu only)"
 echo "=================================================================="
 echo
 echo "WARNING: This script runs the Tykky build and native SmartRedis"
-echo "compilation on the current node. Use a node with the target"
-echo "architecture and sufficient resources."
+echo "compilation on the current node. Use the Roihu node architecture"
+echo "for which the environment is intended."
 echo
 
 # ------------------------------------------------------------------
@@ -90,53 +90,23 @@ prompt_value() {
 }
 
 # ------------------------------------------------------------------
-# Architecture prompt
+# Architecture and SmartSim-CSC profile detection
 # ------------------------------------------------------------------
-prompt_architecture() {
-    local value
-
-    while true; do
-        read -r -p "Type node or architecture (cpu / gpu / x64 / arm64): " value
-        value="$(echo "$value" | tr '[:upper:]' '[:lower:]' | xargs)"
-
-        case "$value" in
-            cpu|x64)
-                ENV_ARCH="x64"
-                return
-                ;;
-            gpu|arm64)
-                ENV_ARCH="arm64"
-                return
-                ;;
-            *)
-                echo "Invalid choice. Enter cpu, gpu, x64, or arm64."
-                echo
-                ;;
-        esac
-    done
-}
-
-# ------------------------------------------------------------------
-# Target system prompt
-# ------------------------------------------------------------------
-prompt_system() {
-    local value
-
-    while true; do
-        read -r -p "Type target system (roihu / mahti / puhti): " value
-        value="$(echo "$value" | tr '[:upper:]' '[:lower:]' | xargs)"
-
-        case "$value" in
-            roihu|mahti|puhti)
-                TARGET_SYSTEM="$value"
-                return
-                ;;
-            *)
-                echo "Invalid choice. Enter roihu, mahti, or puhti."
-                echo
-                ;;
-        esac
-    done
+detect_architecture() {
+    case "$(uname -m)" in
+        x86_64)
+            ENV_ARCH="x64"
+            SMARTSIM_CSC_PROFILE="linux-x64-cpu"
+            ;;
+        aarch64)
+            ENV_ARCH="arm64"
+            SMARTSIM_CSC_PROFILE="linux-arm64-gpu"
+            ;;
+        *)
+            echo "Unsupported Roihu architecture: $(uname -m)" >&2
+            exit 1
+            ;;
+    esac
 }
 
 # ------------------------------------------------------------------
@@ -183,39 +153,23 @@ prompt_value "Type environment nickname" ENV_NICKNAME
 
 echo
 echo "--- Target architecture ---"
-prompt_architecture
-
-echo
-echo "--- Target system ---"
-prompt_system
+detect_architecture
+echo "Detected $(uname -m): ENV_ARCH=$ENV_ARCH, PROFILE=$SMARTSIM_CSC_PROFILE"
 
 echo
 echo "--- Optional PySR / Julia toolchain ---"
 prompt_install_pysr
 
-case "$TARGET_SYSTEM" in
-    roihu)
-        GCC_MODULE="gcc/13.4.0"
-        if [ "$ENV_ARCH" = "x64" ]; then
-            CMAKE_MODULE="cmake/3.26.5"
-        else
-            CMAKE_MODULE="cmake/3.31.11"
-        fi
-        LOAD_GIT_MODULE="no"
-        ;;
-    mahti)
-        GCC_MODULE="gcc/13.1.0"
-        CMAKE_MODULE="cmake/3.28.6"
-        LOAD_GIT_MODULE="yes"
-        ;;
-    puhti)
-        echo
-        echo "The guide does not define fixed Puhti compiler modules."
-        prompt_value "Type GCC module, for example gcc/13.1.0" GCC_MODULE
-        prompt_value "Type CMake module, for example cmake/3.28.6" CMAKE_MODULE
-        LOAD_GIT_MODULE="yes"
-        ;;
-esac
+# Roihu compiler and CUDA modules.
+GCC_MODULE="gcc/13.4.0"
+
+if [ "$ENV_ARCH" = "x64" ]; then
+    CMAKE_MODULE="cmake/3.26.5"
+    CUDA_MODULE=""
+else
+    CMAKE_MODULE="cmake/3.31.11"
+    CUDA_MODULE="cuda/12.9.1"
+fi
 
 echo
 echo "--- Configuration ---"
@@ -223,35 +177,19 @@ echo "CSC_PROJECT       = $CSC_PROJECT"
 echo "PROJECT_USER_DIR  = $PROJECT_USER_DIR"
 echo "ENV_NICKNAME      = $ENV_NICKNAME"
 echo "ENV_ARCH          = $ENV_ARCH"
-echo "TARGET_SYSTEM     = $TARGET_SYSTEM"
 echo "GCC_MODULE        = $GCC_MODULE"
 echo "CMAKE_MODULE      = $CMAKE_MODULE"
+echo "CUDA_MODULE       = ${CUDA_MODULE:-none}"
 echo "Python            = 3.12"
-echo "SmartSim release  = PentagonToy/SmartSim @ v1.0.3-csc"
-echo "SmartRedis release= PentagonToy/SmartRedis @ v1.0.0-csc"
-echo "RedisAI backends  = TensorFlow + ONNX Runtime + LibTorch + JAX"
+echo "SmartSim-CSC repo = https://github.com/PentagonToy/SmartSim-CSC.git"
+echo "SmartSim-CSC ref  = ${SMARTSIM_CSC_REF:-5e98a2f}"
+echo "SmartSim profile  = $SMARTSIM_CSC_PROFILE"
 if [ "$INSTALL_PYSR" = "yes" ]; then
     echo "PySR / Julia      = resolved and precompiled during build"
 else
     echo "PySR / Julia      = SKIPPED (INSTALL_PYSR=no)"
 fi
 echo
-
-HOST_ARCH="$(uname -m)"
-
-if [ "$ENV_ARCH" = "arm64" ] && [ "$HOST_ARCH" != "aarch64" ]; then
-    echo "WARNING: arm64 was selected, but this host reports '$HOST_ARCH'."
-    echo "The generated environment and native library would use the host"
-    echo "architecture rather than ARM64."
-    echo
-fi
-
-if [ "$ENV_ARCH" = "x64" ] && [ "$HOST_ARCH" != "x86_64" ]; then
-    echo "WARNING: x64 was selected, but this host reports '$HOST_ARCH'."
-    echo "The generated environment and native library would use the host"
-    echo "architecture rather than x86_64."
-    echo
-fi
 
 read -r -p "Proceed with this configuration? [y/N]: " CONFIRM_ALL
 case "$CONFIRM_ALL" in
@@ -291,6 +229,10 @@ export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
 export PYTHON_BASE="$BASE_SCRATCH/Python"
 export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
 export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
+export SMARTSIM_CSC_REPO="${SMARTSIM_CSC_REPO:-https://github.com/PentagonToy/SmartSim-CSC.git}"
+export SMARTSIM_CSC_REF="${SMARTSIM_CSC_REF:-5e98a2f}"
+export SMARTSIM_CSC_DIR="$PYTHON_ROOT/src/SmartSim-CSC"
+export SMARTSIM_CSC_PROFILE
 export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
 export TMP_BUILD_DIR="$BASE_SCRATCH/.tykky_runtime_smartsim_$ENV_ARCH"
 
@@ -306,6 +248,9 @@ chmod 600 "$PYTHON_ROOT/install-options-$ENV_ARCH.sh"
 echo "      ENV_ARCH=$ENV_ARCH"
 echo "      PYTHON_ROOT=$PYTHON_ROOT"
 echo "      ENV_PREFIX=$ENV_PREFIX"
+echo "      SMARTSIM_CSC_DIR=$SMARTSIM_CSC_DIR"
+echo "      SMARTSIM_CSC_REF=$SMARTSIM_CSC_REF"
+echo "      SMARTSIM_CSC_PROFILE=$SMARTSIM_CSC_PROFILE"
 echo "      SMARTREDIS_DIR=$SMARTREDIS_DIR"
 echo "      TMP_BUILD_DIR=$TMP_BUILD_DIR"
 echo "      INSTALL_PYSR=$INSTALL_PYSR"
@@ -354,7 +299,6 @@ pyfoam
 kagglehub
 
 # --- JAX Ecosystem ---
-jax[cuda12]
 diffrax
 distrax
 distreqx
@@ -485,6 +429,10 @@ set -e
 : "${CW_BUILD_TMPDIR:?CW_BUILD_TMPDIR is not set}"
 : "${PYTHON_ROOT:?PYTHON_ROOT is not set}"
 : "${ENV_ARCH:?ENV_ARCH is not set}"
+: "${SMARTSIM_CSC_REPO:?SMARTSIM_CSC_REPO is not set}"
+: "${SMARTSIM_CSC_REF:?SMARTSIM_CSC_REF is not set}"
+: "${SMARTSIM_CSC_DIR:?SMARTSIM_CSC_DIR is not set}"
+: "${SMARTSIM_CSC_PROFILE:?SMARTSIM_CSC_PROFILE is not set}"
 : "${INSTALL_PYSR:=yes}"
 
 export TMPDIR="$CW_BUILD_TMPDIR"
@@ -554,28 +502,26 @@ else
     echo "INSTALL_PYSR=no - skipping PySR/Julia resolve and precompile."
 fi
 
-# Install SmartRedis and SmartSim from the CSC-maintained forks.
-uv pip install \
-    --link-mode=copy \
-    "smartredis @ git+https://github.com/PentagonToy/SmartRedis.git@v1.0.0-csc"
+# Install the unified SmartSim-CSC stack.
+mkdir -p "$(dirname "$SMARTSIM_CSC_DIR")"
 
-uv pip install \
-    --link-mode=copy \
-    "smartsim @ git+https://github.com/PentagonToy/SmartSim.git@v1.0.3-csc"
+if [ -d "$SMARTSIM_CSC_DIR/.git" ]; then
+    git -C "$SMARTSIM_CSC_DIR" fetch --tags origin
+else
+    rm -rf "$SMARTSIM_CSC_DIR"
+    git clone "$SMARTSIM_CSC_REPO" "$SMARTSIM_CSC_DIR"
+fi
 
-# Build Redis and all RedisAI backends on both architectures.
+git -C "$SMARTSIM_CSC_DIR" checkout --detach --force "$SMARTSIM_CSC_REF"
+
 export USE_SYSTEMD=no
+export PYTHONNOUSERSITE=1
 
-smart clobber
-
-smart build \
-    --device cpu \
-    --skip-python-packages
-
-# Restore packages potentially changed by smart build.
-uv pip install \
-    --link-mode=copy \
-    --requirements "$PYTHON_ROOT/requirements.in"
+PYTHON="$(command -v python)" \
+SMART="$(dirname "$(command -v python)")/smart" \
+PROFILE="$SMARTSIM_CSC_PROFILE" \
+PYTHONNOUSERSITE=1 \
+    "$SMARTSIM_CSC_DIR/scripts/install.sh"
 
 uv pip check
 
@@ -629,9 +575,15 @@ echo "[4/10] Building the Tykky environment..."
 module purge
 module load tykky
 
+if [ -n "$CUDA_MODULE" ]; then
+    module load "$CUDA_MODULE"
+    echo "      Loaded $CUDA_MODULE"
+fi
+
 export TMPDIR="$TMP_BUILD_DIR"
 export CW_BUILD_TMPDIR="$TMP_BUILD_DIR"
 export INSTALL_PYSR
+export SMARTSIM_CSC_REPO SMARTSIM_CSC_REF SMARTSIM_CSC_DIR SMARTSIM_CSC_PROFILE
 
 rm -rf "$ENV_PREFIX" "$TMP_BUILD_DIR"
 mkdir -p "$TMP_BUILD_DIR"
@@ -686,31 +638,30 @@ module purge
 module load "$GCC_MODULE"
 module load "$CMAKE_MODULE"
 
-if [ "$LOAD_GIT_MODULE" = "yes" ]; then
-    module load git
-fi
-
 echo "      Loaded $GCC_MODULE"
 echo "      Loaded $CMAKE_MODULE"
 echo
 
-# Record the GCC module and the PySR-enabled flag for the loader so it
+# Record runtime modules and the PySR-enabled flag for the loader so it
 # never has to guess.
 cat <<EOF > "$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
 export SMARTSIM_GCC_MODULE="$GCC_MODULE"
+export SMARTSIM_CUDA_MODULE="$CUDA_MODULE"
 export SMARTSIM_PYSR_ENABLED="$INSTALL_PYSR"
 EOF
 chmod 600 "$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
 
 echo "[6/10] Building the native SmartRedis library..."
 
-cd "$BASE_SCRATCH"
-rm -rf "$SMARTREDIS_DIR"
+if [ ! -d "$SMARTSIM_CSC_DIR/components/smartredis" ]; then
+    echo "SmartRedis source was not found in the SmartSim-CSC checkout:"
+    echo "    $SMARTSIM_CSC_DIR/components/smartredis"
+    exit 1
+fi
 
-git clone \
-    --branch v1.0.0-csc \
-    https://github.com/PentagonToy/SmartRedis.git \
-    "$SMARTREDIS_DIR"
+rm -rf "$SMARTREDIS_DIR"
+mkdir -p "$SMARTREDIS_DIR"
+cp -a "$SMARTSIM_CSC_DIR/components/smartredis/." "$SMARTREDIS_DIR/"
 
 cd "$SMARTREDIS_DIR"
 rm -rf build install
@@ -753,7 +704,7 @@ echo "[8/10] Creating loader and update tooling..."
 cat <<'EOF' > "$BASE_SCRATCH/Python4SmartSim.sh"
 #!/bin/bash
 #
-# SmartSim Python environment loader
+# SmartSim Python environment loader (Roihu only)
 #
 # Usage:
 #   source /scratch/<project>/<user>/Utilities/Python4SmartSim.sh
@@ -776,17 +727,20 @@ source "$IDENTITY_FILE"
 export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
 export PYTHON_BASE="$BASE_SCRATCH/Python"
 export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
+export SMARTSIM_CSC_DIR="$PYTHON_ROOT/src/SmartSim-CSC"
 
 case "$(uname -m)" in
     x86_64)
         export ENV_ARCH="x64"
         export KERNEL_ARCH="x86_64"
         export JAX_PLATFORMS="cpu"
+        export SMARTSIM_CSC_PROFILE="linux-x64-cpu"
         ;;
     aarch64)
         export ENV_ARCH="arm64"
         export KERNEL_ARCH="aarch64"
         export JAX_PLATFORMS="cuda"
+        export SMARTSIM_CSC_PROFILE="linux-arm64-gpu"
         ;;
     *)
         echo "Unsupported architecture: $(uname -m)"
@@ -822,6 +776,11 @@ fi
 if [ -n "${SMARTSIM_GCC_MODULE:-}" ] && command -v module >/dev/null 2>&1; then
     module is-loaded "$SMARTSIM_GCC_MODULE" 2>/dev/null ||
         module load "$SMARTSIM_GCC_MODULE"
+fi
+
+if [ -n "${SMARTSIM_CUDA_MODULE:-}" ] && command -v module >/dev/null 2>&1; then
+    module is-loaded "$SMARTSIM_CUDA_MODULE" 2>/dev/null ||
+        module load "$SMARTSIM_CUDA_MODULE"
 fi
 
 path_prepend() {
@@ -895,6 +854,8 @@ if [ "${SMARTSIM_ENV_QUIET:-0}" != "1" ]; then
     echo "SmartSim Python environment loaded"
     echo "ENV_ARCH=$ENV_ARCH"
     echo "ENV_PREFIX=$ENV_PREFIX"
+    echo "SMARTSIM_CSC_DIR=$SMARTSIM_CSC_DIR"
+    echo "SMARTSIM_CSC_PROFILE=$SMARTSIM_CSC_PROFILE"
     echo "SMARTREDIS_DIR=$SMARTREDIS_DIR"
     echo "JAX_PLATFORMS=$JAX_PLATFORMS"
     echo "SMARTSIM_PYSR_ENABLED=$SMARTSIM_PYSR_ENABLED"
@@ -984,26 +945,8 @@ else
     echo "INSTALL_PYSR=no - skipping Julia/PySR maintenance during update."
 fi
 
-uv pip install \
-    --link-mode=copy \
-    "smartredis @ git+https://github.com/PentagonToy/SmartRedis.git@v1.0.0-csc"
-
-uv pip install \
-    --link-mode=copy \
-    "smartsim @ git+https://github.com/PentagonToy/SmartSim.git@v1.0.3-csc"
-
-export USE_SYSTEMD=no
-
-smart clobber
-
-smart build \
-    --device cpu \
-    --skip-python-packages
-
-uv pip install \
-    --link-mode=copy \
-    --requirements "$PYTHON_ROOT/requirements.in"
-
+# SmartSim and SmartRedis are owned by the pinned SmartSim-CSC checkout.
+# Package updates must not reinstall or rebuild the SmartSim stack.
 uv pip check
 
 python -m pip list --format=freeze \
@@ -1048,9 +991,11 @@ export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
 case "$(uname -m)" in
     x86_64)
         export ENV_ARCH="x64"
+        export SMARTSIM_CSC_PROFILE="linux-x64-cpu"
         ;;
     aarch64)
         export ENV_ARCH="arm64"
+        export SMARTSIM_CSC_PROFILE="linux-arm64-gpu"
         ;;
     *)
         echo "Unsupported architecture: $(uname -m)"
@@ -1081,8 +1026,8 @@ for package in "$@"; do
     package_name="$(printf '%s\n' "$package" | sed -E 's/\[.*//; s/[<>=!~].*//')"
 
     case "$package_name" in
-        smartsim|smartredis)
-            echo "$package_name is managed separately and must not be added to requirements.in."
+        smartsim|smartredis|jax|jaxlib|jax-cuda12-plugin|jax-cuda12-pjrt)
+            echo "$package_name is managed by SmartSim-CSC and must not be updated with smartsim-update."
             exit 1
             ;;
         pysr|julia)
@@ -1218,6 +1163,9 @@ echo "Update or add packages:"
 echo "    smartsim-update pydantic"
 echo "    smartsim-update loguru pyinstrument"
 echo
+echo "To update the SmartSim-CSC stack itself, pin a new SMARTSIM_CSC_REF"
+echo "and rerun this installer for the current architecture."
+echo
 echo "The environment uses Python 3.12 and includes:"
 echo "    JAX + Equinox"
 echo "    TensorFlow 2.18.1"
@@ -1228,13 +1176,13 @@ if [ "$INSTALL_PYSR" = "yes" ]; then
 else
     echo "    PySR + JuliaCall: SKIPPED (INSTALL_PYSR=no for $ENV_ARCH)"
 fi
-echo "    SmartSim + SmartRedis CSC forks"
-echo "    RedisAI TensorFlow + ONNX Runtime + LibTorch + JAX backends"
+echo "    SmartSim-CSC unified stack"
+echo "    RedisAI ONNX Runtime + JAX backends selected by stack.toml"
 echo
 echo "No SmartSim or SmartRedis source patching was applied."
 echo
 echo "Run the script again on the other architecture when both x64 and"
-echo "arm64 environments are required. Each architecture asks for its own"
-echo "PySR/Julia choice, and it is recorded in:"
+echo "arm64 Roihu environments are required. Each architecture asks for"
+echo "its own PySR/Julia choice, and it is recorded in:"
 echo "    $PYTHON_ROOT/install-options-$ENV_ARCH.sh"
 echo "Use the same identity values."

@@ -1,6 +1,6 @@
 # SmartSim Environment Configuration
 
-Last updated: 22 July 2026
+Last updated: 23 July 2026
 
 > [!TIP]
 > ## One-Command Installation
@@ -16,73 +16,71 @@ Last updated: 22 July 2026
 
 ## Overview & Motivation
 
-This folder deploys a **unified ML + SmartSim/SmartRedis stack** on CSC supercomputers (**Puhti / Mahti / Roihu**) — **JAX + Equinox + TensorFlow + PyTorch + ONNX + SmartSim + SmartRedis**, with **PySR (JuliaCall)** available as an **optional** add-on, all in one environment.
+This folder deploys a **unified ML + SmartSim/SmartRedis stack on CSC's Roihu supercomputer only** — **JAX + Equinox + TensorFlow + PyTorch + ONNX + SmartSim + SmartRedis**, with **PySR (JuliaCall)** available as an **optional** add-on, all in one environment. Puhti and Mahti are no longer targets of this guide.
 
-This environment is now a **superset of the previously separate `PythonML` stack**. Every package and workflow that used to live in the standalone ML environment — including PySR's Julia toolchain, if selected — is included here, built and validated on both `x64` and `arm64`. The earlier guidance to keep the ML and SmartSim stacks strictly separate no longer applies once PySR/Julia support is folded in this way; a standalone `PythonML/` environment is not needed if you use this stack.
+The target architecture is **auto-detected** from the node you run the installer on:
 
-**PySR/Julia is optional.** Some users never run symbolic regression and would rather skip the extra build time, disk usage, and Julia toolchain entirely. A single `INSTALL_PYSR` toggle, set once per architecture in Section 1 and persisted to `install-options-$ENV_ARCH.sh`, controls whether:
+| Host (`uname -m`) | `ENV_ARCH` | SmartSim-CSC profile |
+| --- | --- | --- |
+| `x86_64` (Roihu CPU) | `x64` | `linux-x64-cpu` |
+| `aarch64` (Roihu GPU) | `arm64` | `linux-arm64-gpu` |
 
-* `pysr`/`julia` are added to `requirements.in` at all,
+SmartSim and SmartRedis no longer come from two separate CSC forks. Both are now sourced from a single **[SmartSim-CSC](https://github.com/PentagonToy/SmartSim-CSC)** monorepo, which also bundles the RedisAI source and a `stack.toml` that defines build profiles:
+
+```text
+Component      Version
+SmartSim-CSC   1.0.0
+SmartSim       1.0.0+csc
+SmartRedis     1.0.0+csc
+RedisAI        1.2.7
+```
+
+The officially validated profile is `linux-x64-cpu`:
+
+```text
+[profiles.linux-x64-cpu]
+device = "cpu"
+backends = ["onnxruntime", "jax"]
+```
+
+`linux-arm64-cpu` is validated the same way. The `linux-arm64-gpu` profile has also been validated on a Roihu GH200 compute node with CUDA 12.9. The environment may be installed on the ARM64 GPU login node, but GPU runtime validation and GPU workloads require an allocated GPU compute node.
+
+Only **ONNX Runtime** and **JAX** are built as RedisAI backends by this stack — there is no RedisAI TensorFlow or LibTorch backend here. TensorFlow and PyTorch are still installed as regular Python packages (usable directly in Python), just not exposed through `set_model`/`run_model`.
+
+**PySR/Julia is optional**, unrelated to the SmartSim-CSC stack itself. A single `INSTALL_PYSR` toggle, asked once per architecture and persisted to `install-options-$ENV_ARCH.sh`, controls whether:
+
+* `pysr`/`julia` are added to `requirements.in`,
 * the Julia resolve/precompile step runs inside the Tykky build,
 * the one-time writable Julia runtime copy (Section 5.1) is prepared,
-* the loader (Section 7) configures `PYTHON_JULIAPKG_PROJECT`/`JULIA_DEPOT_PATH` at all.
+* the loader (Section 7) configures `PYTHON_JULIAPKG_PROJECT`/`JULIA_DEPOT_PATH`.
 
-Everything else in the stack — SmartSim, SmartRedis, JAX, TensorFlow, PyTorch, ONNX, RedisAI backends — is unaffected by this toggle and always installs.
-
-SmartRedis installs from the CSC-maintained `v1.0.0-csc` release, while SmartSim installs from `v1.0.3-csc`. These releases already contain:
-
-* **Python 3.12 support**
-* **NumPy 2.x compatibility**
-* **Linux ARM64 platform support** — upstream SmartSim only shipped a `Darwin+ARM64+CPU` platform config; the fork adds `Linux+ARM64+CPU` and the missing `aarch64`→`arm64` architecture-string mapping
-* **RedisAI TensorFlow backend on Linux ARM64**
-* **RedisAI ONNX Runtime backend on Linux ARM64**
-* **RedisAI LibTorch backend on Linux ARM64**
-* **SmartRedis compiler/source fixes**
-* **RedisAI JAX backend with direct JAX/Equinox model registration**
-* **Automatic JAX worker lifecycle management**
-* **JAX output shape and `float32`/`float64`/`int32`/`int64` dtype support**
-* **Polymorphic JAX batch dimensions through `jax_shape_specs`**
-
-**No post-install source patching is required.** `smart build` runs identically on `x64` and `arm64`, building the RedisAI TensorFlow, ONNX Runtime, LibTorch, and JAX backends automatically.
-
-When `INSTALL_PYSR=yes`, **PySR's Julia dependency is resolved and precompiled at build time**, exactly as it was in the standalone ML stack: `juliapkg` fetches Julia and the `PythonCall`/`SymbolicRegression` packages inside the Tykky build. Immediately after the Tykky build succeeds, the installer copies that packaged Julia *project* **once** into a writable scratch location (the Tykky image itself is read-only and `juliapkg` needs to write a lock file there); the Julia *depot* directory is created alongside it. Sourcing the loader afterwards only points environment variables at these already-prepared directories — it no longer copies or deletes anything. `PYTHON_JULIAPKG_OFFLINE=yes` at runtime prevents any accidental re-download. When `INSTALL_PYSR=no`, none of this happens — no Julia download, no `julia_env`/`julia_depot` directories, no runtime copy, and the loader skips the Julia block entirely.
-
-RedisAI model execution is available for TensorFlow, ONNX, PyTorch (via LibTorch), and JAX/Equinox models. JAX or Equinox callables can be registered directly with `set_model(..., backend="JAX", example_inputs=..., jax_shape_specs=...)` and executed through `run_model`; SmartSim manages the persistent JAX worker automatically.
-
-We use **Tykky** to package the whole Python stack into a single-file container image, avoiding Lustre metadata slowdowns from thousands of small file imports.
-
-A Tykky container built for one architecture will not run on the other. The **SmartRedis native library** (Section 6, used for OpenFOAM/C++/Fortran linkage) is built separately per architecture via CMake, independent of the `smart build` step described above, and is unaffected by the PySR toggle.
-
-**Why Tykky:** near-instant imports, a single reproducible image, fast startup, isolation from the host environment.
+We use **Tykky** to package the whole Python stack into a single-file container image, avoiding Lustre metadata slowdowns from thousands of small file imports. A Tykky container built for one architecture will not run on the other. The **native SmartRedis library** (Section 6, needed for OpenFOAM/C++/Fortran linkage) is now built from `components/smartredis` inside the SmartSim-CSC checkout rather than from a separate git clone, and is unaffected by the PySR toggle.
 
 **Why uv:** fast resolution/installation, plus `uv pip check` to validate the final dependency graph. `--link-mode=copy` is used throughout since the uv cache and the Tykky build environment live on different filesystems.
 
 ```text
-Python        3.12
-SmartSim      1.0.3+csc (PentagonToy/SmartSim @ v1.0.3-csc)
-SmartRedis    1.0.0+csc (PentagonToy/SmartRedis @ v1.0.0-csc)
-JAX           resolved at build time (CUDA 12 on arm64)
-TensorFlow    2.18.1
-PyTorch       2.7.1
-ONNX          resolved (+ ONNX Runtime, tf2onnx, skl2onnx)
-PySR / Julia  OPTIONAL (INSTALL_PYSR=yes/no); resolved + precompiled at build time when enabled
-NumPy         >= 2.0
-protobuf      resolved by uv (no longer hard-pinned)
-CMake         resolved (no longer pinned < 3.30.0)
-RedisAI       TensorFlow + ONNX Runtime + LibTorch + JAX backends, built on both x64 and arm64
+Python           3.12
+SmartSim-CSC     1.0.0 (PentagonToy/SmartSim-CSC, pinned ref)
+SmartSim         1.0.0+csc
+SmartRedis       1.0.0+csc
+RedisAI          1.2.7, backends: onnxruntime + jax (per stack.toml)
+JAX              installed by SmartSim-CSC's install.sh, not requirements.in
+TensorFlow       2.18.1  (Python package only, not a RedisAI backend)
+PyTorch          2.7.1   (Python package only, not a RedisAI backend)
+ONNX             resolved (+ ONNX Runtime, tf2onnx, skl2onnx)
+PySR / Julia     OPTIONAL (INSTALL_PYSR=yes/no)
+NumPy            >= 2.0
 ```
 
 ```text
-requirements.in                  Human-maintained direct package specifications; pysr/julia present only if INSTALL_PYSR=yes
-requirements-$ENV_ARCH.txt       Installed-state snapshot recorded after a successful build (excludes SmartSim/SmartRedis)
-julia-environment-$ENV_ARCH.txt  Julia toolchain + package status; written only if INSTALL_PYSR=yes, otherwise a placeholder
+requirements.in                  Human-maintained direct package specs; no smartsim/smartredis/jax; pysr/julia only if INSTALL_PYSR=yes
+requirements-$ENV_ARCH.txt       Installed-state snapshot recorded after a successful build
+julia-environment-$ENV_ARCH.txt  Julia toolchain/package status; placeholder if INSTALL_PYSR=no
 install-options-$ENV_ARCH.sh     Persists INSTALL_PYSR across sessions
-runtime-$ENV_ARCH.sh             GCC module + PySR-enabled flag recorded at build time, read by the loader on every source
+runtime-$ENV_ARCH.sh             GCC/CUDA modules + PySR-enabled flag, read by the loader every source
 ```
 
-Build order: install `uv` → install the full `requirements.in` set (TensorFlow, PyTorch, ONNX, and `pysr`/`julia` only if `INSTALL_PYSR=yes`) → resolve/precompile Julia+PySR (if enabled) → install SmartRedis (fork) → install SmartSim (fork) → `smart build` (Redis + RedisAI, all backends) → restore `requirements.in` → `uv pip check` → **prepare the writable Julia runtime once, if enabled** → build the native SmartRedis library and record its GCC module + PySR-enabled flag.
-
-Part of the [CSC Environment Helpers Framework](https://github.com/PentagonToy/CSCEnvironmentHelpers). Production examples live in [SmartSim4CSC](https://github.com/PentagonToy/SmartSim4CSC).
+Build order: install `uv` → install `requirements.in` (TensorFlow, PyTorch, ONNX, `pysr`/`julia` if enabled) → resolve/precompile Julia+PySR (if enabled) → checkout pinned `SmartSim-CSC` ref → run its `scripts/install.sh` for the detected profile (installs SmartSim + SmartRedis, builds Redis + RedisAI + selected backends, runs `smart validate`) → `uv pip check` → prepare the writable Julia runtime once, if enabled → build the native SmartRedis library from `components/smartredis` and record its GCC/CUDA modules + PySR-enabled flag.
 
 ---
 
@@ -92,42 +90,36 @@ Part of the [CSC Environment Helpers Framework](https://github.com/PentagonToy/C
 Set identity once (Section 0)
   |
   v
-Choose target architecture + PySR/Julia toggle (Section 1)
+Run the installer on the target Roihu node — architecture is auto-detected
   |
-  +-- x64  (Roihu CPU / Puhti / Mahti)
-  |     Global Config (x64) --> choose INSTALL_PYSR=yes/no, persist to install-options-x64.sh
-  |     --> install full requirements.in (pysr/julia included only if INSTALL_PYSR=yes)
-  |     --> [if INSTALL_PYSR=yes] resolve/precompile Julia + PySR
-  |     --> install SmartRedis v1.0.0-csc + SmartSim v1.0.3-csc
-  |     --> build Tykky env (Redis + RedisAI TensorFlow/ONNX Runtime/LibTorch/JAX backends)
-  |     --> [if INSTALL_PYSR=yes] prepare writable Julia runtime ONCE
-  |     --> build SmartRedis-x64 native library; record GCC module + PySR flag used
+  +-- Roihu CPU node (x86_64) -> ENV_ARCH=x64, PROFILE=linux-x64-cpu
+  |     --> choose INSTALL_PYSR=yes/no, persist to install-options-x64.sh
+  |     --> install requirements.in (pysr/julia only if enabled)
+  |     --> [if enabled] resolve/precompile Julia + PySR
+  |     --> checkout SmartSim-CSC @ pinned ref
+  |     --> run scripts/install.sh PROFILE=linux-x64-cpu (SmartSim+SmartRedis+RedisAI: onnxruntime+jax)
+  |     --> uv pip check
+  |     --> [if enabled] prepare writable Julia runtime ONCE
+  |     --> build native SmartRedis-$ENV_ARCH library from components/smartredis; record GCC/CUDA modules + PySR flag
   |
-  +-- arm64 (Roihu GPU)
-        Global Config (arm64) --> choose INSTALL_PYSR=yes/no, persist to install-options-arm64.sh
-        --> install full requirements.in (pysr/julia included only if INSTALL_PYSR=yes)
-        --> [if INSTALL_PYSR=yes] resolve/precompile Julia + PySR
-        --> install SmartRedis v1.0.0-csc + SmartSim v1.0.3-csc
-        --> build Tykky env (Redis + RedisAI TensorFlow/ONNX Runtime/LibTorch/JAX backends)
-        --> [if INSTALL_PYSR=yes] prepare writable Julia runtime ONCE
-        --> build SmartRedis-arm64 native library; record GCC module + PySR flag used
-        --> also runs JAX/Equinox/TensorFlow/PyTorch(/PySR) training and inference locally
+  +-- Roihu GPU node (aarch64) -> ENV_ARCH=arm64, PROFILE=linux-arm64-gpu
+        same steps as above, using components checked out from SMARTSIM_CSC_REF
 
 After the required track(s) are built:
   Create Python4SmartSim.sh --> source Python4SmartSim.sh
-  --> loader picks x64/arm64 from `uname -m`, only sets environment variables
-      and PATH/LD_LIBRARY_PATH/CMAKE_PREFIX_PATH (idempotent — safe to re-source)
+  --> loader picks x64/arm64 + profile from `uname -m`, only sets env vars and
+      PATH/LD_LIBRARY_PATH/CMAKE_PREFIX_PATH (idempotent)
   --> loader configures Julia env vars only if this architecture was built with INSTALL_PYSR=yes
   --> Jupyter kernels run through a launcher wrapper that sources the same loader
 ```
 
-Skip the `arm64` track entirely if you never run workloads on Roihu GPU nodes against this stack. Each architecture can independently choose `INSTALL_PYSR=yes` or `no` — for example, PySR could be skipped on `arm64` while kept on `x64`.
+Skip the `arm64` track if you do not need Roihu GPU workloads. Each architecture independently chooses `INSTALL_PYSR=yes` or `no`.
 
 ---
 
 ## 0. One-Time Identity Configuration
 
-Every script needs three values: your CSC project ID, your directory under that project, and the environment nickname. Set them **once** in a file under `$HOME`.
+Every script needs three values: your CSC project ID, your directory under that project, and the environment nickname. Set them **once**.
 
 > `Harry`, `Dumbledore`, and `project_xxxxxxx` are fictional placeholders. Fill in real values **only here**.
 
@@ -143,8 +135,6 @@ EOF
 chmod 600 "$HOME/.config/csc-hpc/identity.sh"
 ```
 
-Edit with real values, then verify:
-
 ```bash
 nano "$HOME/.config/csc-hpc/identity.sh"
 
@@ -154,87 +144,49 @@ echo "PROJECT_USER_DIR=$PROJECT_USER_DIR"
 echo "ENV_NICKNAME=$ENV_NICKNAME"
 ```
 
-`ENV_ARCH` and `INSTALL_PYSR` are **not** part of this file — they're chosen per build in Section 1, and `ENV_ARCH` is auto-detected via `uname -m` in the loader / `smartsim-update`.
+`ENV_ARCH`, `SMARTSIM_CSC_PROFILE`, and `INSTALL_PYSR` are **not** part of this file — the first two are auto-detected from `uname -m` everywhere, and `INSTALL_PYSR` is chosen per build in Section 1.
 
 ---
 
 ## 1. Global Configuration
 
-Run **one** block per node. `ENV_ARCH` differs, and each architecture asks separately whether to install PySR/Julia.
-
-### 1.1 x64 (Roihu CPU / Puhti / Mahti)
+Run on the Roihu node matching the architecture you want to build. Architecture and profile are detected automatically; you only choose the PySR toggle.
 
 ```bash
 source "$HOME/.config/csc-hpc/identity.sh"
-export ENV_ARCH="x64"
+
+case "$(uname -m)" in
+    x86_64)  export ENV_ARCH="x64";  export SMARTSIM_CSC_PROFILE="linux-x64-cpu" ;;
+    aarch64) export ENV_ARCH="arm64"; export SMARTSIM_CSC_PROFILE="linux-arm64-gpu" ;;
+    *) echo "Unsupported Roihu architecture: $(uname -m)"; return 1 ;;
+esac
 
 export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
 export PYTHON_BASE="$BASE_SCRATCH/Python"
 export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
 export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
+export SMARTSIM_CSC_REPO="https://github.com/PentagonToy/SmartSim-CSC.git"
+export SMARTSIM_CSC_REF="5e98a2f"
+export SMARTSIM_CSC_DIR="$PYTHON_ROOT/src/SmartSim-CSC"
 export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
 export TMP_BUILD_DIR="$BASE_SCRATCH/.tykky_runtime_smartsim_$ENV_ARCH"
 
 mkdir -p "$PYTHON_ROOT/envs" "$TMP_BUILD_DIR"
 
-# --- PySR / Julia toggle (per architecture) ---
-read -r -p "Install PySR (symbolic regression) with its Julia toolchain for $ENV_ARCH? [Y/n]: " _INSTALL_PYSR_ANSWER
-case "$_INSTALL_PYSR_ANSWER" in
-    n|N|no|NO) export INSTALL_PYSR="no" ;;
-    *)         export INSTALL_PYSR="yes" ;;
-esac
-unset _INSTALL_PYSR_ANSWER
+read -r -p "Install PySR (symbolic regression) with its Julia toolchain for $ENV_ARCH? [Y/n]: " _A
+case "$_A" in n|N|no|NO) export INSTALL_PYSR="no" ;; *) export INSTALL_PYSR="yes" ;; esac
+unset _A
 
 cat <<EOF > "$PYTHON_ROOT/install-options-$ENV_ARCH.sh"
 export INSTALL_PYSR="$INSTALL_PYSR"
 EOF
 chmod 600 "$PYTHON_ROOT/install-options-$ENV_ARCH.sh"
 
-echo "ENV_ARCH=$ENV_ARCH"
-echo "PYTHON_ROOT=$PYTHON_ROOT"
-echo "ENV_PREFIX=$ENV_PREFIX"
-echo "SMARTREDIS_DIR=$SMARTREDIS_DIR"
-echo "TMP_BUILD_DIR=$TMP_BUILD_DIR"
-echo "INSTALL_PYSR=$INSTALL_PYSR"
+echo "ENV_ARCH=$ENV_ARCH  PROFILE=$SMARTSIM_CSC_PROFILE  INSTALL_PYSR=$INSTALL_PYSR"
+echo "SMARTSIM_CSC_REF=$SMARTSIM_CSC_REF"
 ```
 
-### 1.2 arm64 (Roihu GPU)
-
-```bash
-source "$HOME/.config/csc-hpc/identity.sh"
-export ENV_ARCH="arm64"
-
-export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
-export PYTHON_BASE="$BASE_SCRATCH/Python"
-export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
-export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
-export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
-export TMP_BUILD_DIR="$BASE_SCRATCH/.tykky_runtime_smartsim_$ENV_ARCH"
-
-mkdir -p "$PYTHON_ROOT/envs" "$TMP_BUILD_DIR"
-
-# --- PySR / Julia toggle (per architecture) ---
-read -r -p "Install PySR (symbolic regression) with its Julia toolchain for $ENV_ARCH? [Y/n]: " _INSTALL_PYSR_ANSWER
-case "$_INSTALL_PYSR_ANSWER" in
-    n|N|no|NO) export INSTALL_PYSR="no" ;;
-    *)         export INSTALL_PYSR="yes" ;;
-esac
-unset _INSTALL_PYSR_ANSWER
-
-cat <<EOF > "$PYTHON_ROOT/install-options-$ENV_ARCH.sh"
-export INSTALL_PYSR="$INSTALL_PYSR"
-EOF
-chmod 600 "$PYTHON_ROOT/install-options-$ENV_ARCH.sh"
-
-echo "ENV_ARCH=$ENV_ARCH"
-echo "PYTHON_ROOT=$PYTHON_ROOT"
-echo "ENV_PREFIX=$ENV_PREFIX"
-echo "SMARTREDIS_DIR=$SMARTREDIS_DIR"
-echo "TMP_BUILD_DIR=$TMP_BUILD_DIR"
-echo "INSTALL_PYSR=$INSTALL_PYSR"
-```
-
-Already know you want (or don't want) PySR and don't want the prompt? Skip the `read` line and just `export INSTALL_PYSR="yes"` or `export INSTALL_PYSR="no"` directly before writing `install-options-$ENV_ARCH.sh`.
+> `SMARTSIM_CSC_REF` currently defaults to the validated commit `5e98a2f`. After these changes are merged and released, replace the commit with the corresponding release tag.
 
 **Directory layout:**
 
@@ -242,13 +194,13 @@ Already know you want (or don't want) PySR and don't want the prompt? Skip the `
 /scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities/          # $BASE_SCRATCH
 ├── .tykky_runtime_smartsim_x64/
 ├── .tykky_runtime_smartsim_arm64/
-├── .julia_env_runtime_x64/       # created ONCE, right after the Tykky build (Section 5.1) — ONLY if INSTALL_PYSR=yes
-├── .julia_env_runtime_arm64/     # created ONCE, right after the Tykky build (Section 5.1) — ONLY if INSTALL_PYSR=yes
-├── .julia_depot_runtime_x64/     # created ONCE, right after the Tykky build (Section 5.1) — ONLY if INSTALL_PYSR=yes
-├── .julia_depot_runtime_arm64/   # created ONCE, right after the Tykky build (Section 5.1) — ONLY if INSTALL_PYSR=yes
+├── .julia_env_runtime_x64/       # ONCE after Tykky build (5.1) — only if INSTALL_PYSR=yes
+├── .julia_env_runtime_arm64/
+├── .julia_depot_runtime_x64/
+├── .julia_depot_runtime_arm64/
 ├── Python4SmartSim.sh
-├── SmartRedis-x64/                                  # $SMARTREDIS_DIR (x64)
-├── SmartRedis-arm64/                                # $SMARTREDIS_DIR (arm64)
+├── SmartRedis-x64/                                  # native install, $SMARTREDIS_DIR
+├── SmartRedis-arm64/
 └── Python/                                           # $PYTHON_BASE
     └── PythonSmartSim/                               # $PYTHON_ROOT
         ├── base4SmartSim.yml
@@ -257,18 +209,17 @@ Already know you want (or don't want) PySR and don't want the prompt? Skip the `
         ├── requirements.in
         ├── requirements-x64.txt
         ├── requirements-arm64.txt
-        ├── julia-environment-x64.txt        # placeholder text if INSTALL_PYSR=no for x64
-        ├── julia-environment-arm64.txt       # placeholder text if INSTALL_PYSR=no for arm64
-        ├── install-options-x64.sh            # persists INSTALL_PYSR for x64
-        ├── install-options-arm64.sh          # persists INSTALL_PYSR for arm64
-        ├── runtime-x64.sh          # records GCC module + PySR-enabled flag for x64
-        ├── runtime-arm64.sh        # records GCC module + PySR-enabled flag for arm64
-        ├── jupyter-kernel-x64.sh   # kernel launcher wrapper (Section 8)
-        ├── jupyter-kernel-arm64.sh # kernel launcher wrapper (Section 8)
+        ├── julia-environment-x64.txt
+        ├── julia-environment-arm64.txt
+        ├── install-options-x64.sh
+        ├── install-options-arm64.sh
+        ├── runtime-x64.sh
+        ├── runtime-arm64.sh
+        ├── jupyter-kernel-x64.sh
+        ├── jupyter-kernel-arm64.sh
+        ├── src/SmartSim-CSC/                # $SMARTSIM_CSC_DIR — pinned monorepo checkout
         └── envs/
 ```
-
-The `.julia_env_runtime_*` / `.julia_depot_runtime_*` directories, `runtime-$ENV_ARCH.sh`, and `install-options-$ENV_ARCH.sh` are created **once**, at build time (Sections 1, 5.1, and 6) — not by the loader. Sourcing `Python4SmartSim.sh` only ever reads them; it never copies, deletes, or recreates them. Re-run the installer for a given architecture if these directories are missing or out of date.
 
 ---
 
@@ -278,20 +229,16 @@ The `.julia_env_runtime_*` / `.julia_depot_runtime_*` directories, `runtime-$ENV
 | --- | --- | --- |
 | Python | 3.12 | Base interpreter |
 | uv | latest at build | Resolution, installation, `uv pip check` |
-| SmartSim | `1.0.3+csc` (`PentagonToy/SmartSim @ v1.0.3-csc`) | Orchestration; Redis, RedisAI, and JAX worker lifecycle |
-| SmartRedis | `1.0.0+csc` (`PentagonToy/SmartRedis @ v1.0.0-csc`) | Python client with direct JAX/Equinox registration + native C++/Fortran library |
-| JAX / Equinox / distrax / distreqx | resolved at build time; CUDA 12 on arm64 | Autodiff / training / inference / probabilistic modelling |
-| TensorFlow | 2.18.1 | Python framework + source for the RedisAI TensorFlow backend |
-| PyTorch | 2.7.1 | Python framework; RedisAI executes via the LibTorch backend |
-| ONNX / ONNX Runtime | resolved at build time | Model interchange + Python-side ONNX Runtime |
-| PySR / julia (JuliaCall) | **optional**, resolved | Symbolic regression; only installed and precompiled if `INSTALL_PYSR=yes` |
-| shap | resolved | Model explainability |
-| dvc | resolved | Data version control |
-| nbconvert / papermill | resolved | Notebook execution and export |
-| optuna / optuna-dashboard | resolved | Hyperparameter optimisation + web UI |
-| NumPy | `>= 2.0` | No longer pinned below 2.0 |
-| pydantic / loguru / pyinstrument | resolved | Config validation, structured logging, profiling |
-| RedisAI backends | TensorFlow + ONNX Runtime + LibTorch + JAX, built on **both** architectures | JAX/Equinox and conventional ML model execution through SmartRedis |
+| SmartSim-CSC | 1.0.0, pinned ref | Monorepo providing SmartSim, SmartRedis, RedisAI sources + `scripts/install.sh` |
+| SmartSim | 1.0.0+csc | Orchestration; Redis, RedisAI, JAX worker lifecycle |
+| SmartRedis | 1.0.0+csc | Python client + native C++/Fortran library; direct JAX/Equinox registration |
+| RedisAI | 1.2.7 | Backends selected per profile: `onnxruntime`, `jax` |
+| JAX / Equinox / distrax / distreqx | installed by `install.sh` | Autodiff / training / inference |
+| TensorFlow | 2.18.1 | Python framework only — not a RedisAI backend here |
+| PyTorch | 2.7.1 | Python framework only — not a RedisAI backend here |
+| ONNX / ONNX Runtime | resolved | Model interchange + Python-side runtime |
+| PySR / julia (JuliaCall) | **optional** | Symbolic regression; only if `INSTALL_PYSR=yes` |
+| NumPy | `>= 2.0` | — |
 
 ---
 
@@ -300,11 +247,8 @@ The `.julia_env_runtime_*` / `.julia_depot_runtime_*` directories, `runtime-$ENV
 ```bash
 mkdir -p "$PYTHON_ROOT"
 cd "$PYTHON_ROOT"
-
-# Restore INSTALL_PYSR if this is a fresh shell.
 source "$PYTHON_ROOT/install-options-$ENV_ARCH.sh" 2>/dev/null || true
 : "${INSTALL_PYSR:=yes}"
-echo "INSTALL_PYSR=$INSTALL_PYSR"
 ```
 
 ### 3.1 `base4SmartSim.yml`
@@ -327,7 +271,7 @@ EOF
 
 ### 3.2 `requirements.in`
 
-Do **not** add `smartsim` or `smartredis` here — both install separately from the fork in `extra4SmartSim.sh`. `pysr`/`julia` are appended conditionally, based on `INSTALL_PYSR`, rather than always being present.
+`smartsim`, `smartredis`, and `jax` itself are **not** listed here — SmartSim-CSC's `install.sh` owns all three. `pysr`/`julia` are appended only if `INSTALL_PYSR=yes`.
 
 ```bash
 cat <<'EOF' > "$PYTHON_ROOT/requirements.in"
@@ -350,8 +294,7 @@ pyfoam
 # --- Data Acquisition ---
 kagglehub
 
-# --- JAX Ecosystem ---
-jax[cuda12]
+# --- JAX Ecosystem (jax itself installed by SmartSim-CSC install.sh) ---
 diffrax
 distrax
 distreqx
@@ -468,17 +411,12 @@ if [ "$INSTALL_PYSR" = "yes" ]; then
 pysr
 julia
 EOF
-    echo "Added pysr/julia to requirements.in (INSTALL_PYSR=yes)."
-else
-    echo "Skipped pysr/julia in requirements.in (INSTALL_PYSR=no)."
 fi
 ```
 
-`tensorflow==2.18.1` and `torch==2.7.1` remain pinned. `jax[cuda12]`, ONNX, ONNX Runtime, `protobuf`, and `numpy` are deliberately left unpinned and resolve to the newest compatible versions at build time. Python-side framework versions do not need to exactly match the RedisAI backend versions built by `smart build`, since they're separate runtime components — validate exported models against the corresponding RedisAI backend (Section 13) rather than assuming version equality. When `INSTALL_PYSR=yes`, `pysr`/`julia` also require the resolve/precompile step below — adding them to `requirements.in` alone is not sufficient.
-
 ### 3.3 `extra4SmartSim.sh` (post-install, runs *inside* the build)
 
-This installs the full package set, conditionally resolves and precompiles PySR's Julia dependency (identical to the standalone ML stack's process, only when `INSTALL_PYSR=yes`), then installs and builds SmartSim/SmartRedis with all RedisAI backends. `smart build` runs identically on both architectures, with no runtime patching. `INSTALL_PYSR` is exported before the Tykky build is invoked (Section 5), so it's inherited here the same way `ENV_ARCH`/`PYTHON_ROOT`/`CW_BUILD_TMPDIR` already are.
+Installs the ML package set, conditionally resolves/precompiles PySR's Julia dependency, checks out the pinned `SmartSim-CSC` ref, and hands off to its own `scripts/install.sh` for the detected profile.
 
 ```bash
 cat <<'EOF' > "$PYTHON_ROOT/extra4SmartSim.sh"
@@ -488,6 +426,10 @@ set -e
 : "${CW_BUILD_TMPDIR:?CW_BUILD_TMPDIR is not set}"
 : "${PYTHON_ROOT:?PYTHON_ROOT is not set}"
 : "${ENV_ARCH:?ENV_ARCH is not set}"
+: "${SMARTSIM_CSC_REPO:?SMARTSIM_CSC_REPO is not set}"
+: "${SMARTSIM_CSC_REF:?SMARTSIM_CSC_REF is not set}"
+: "${SMARTSIM_CSC_DIR:?SMARTSIM_CSC_DIR is not set}"
+: "${SMARTSIM_CSC_PROFILE:?SMARTSIM_CSC_PROFILE is not set}"
 : "${INSTALL_PYSR:=yes}"
 
 export TMPDIR="$CW_BUILD_TMPDIR"
@@ -499,16 +441,9 @@ mkdir -p "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
 
 python -m pip install --no-cache-dir uv
 
-uv pip install \
-    --link-mode=copy \
-    --requirements "$PYTHON_ROOT/requirements.in"
+uv pip install --link-mode=copy --requirements "$PYTHON_ROOT/requirements.in"
 
 if [ "$INSTALL_PYSR" = "yes" ]; then
-    echo "INSTALL_PYSR=yes — resolving and precompiling PySR's Julia dependency..."
-
-    # Always derive the Julia paths from the *actual* Python sys.prefix inside
-    # the container, not from $ENV_PREFIX — Tykky's wrapper path and the real
-    # in-container prefix are not the same thing.
     PYTHON_PREFIX="$(python -c 'import sys; print(sys.prefix)')"
     export JULIA_DEPOT_PATH="$PYTHON_PREFIX/julia_depot"
     export PYTHON_JULIAPKG_PROJECT="$PYTHON_PREFIX/julia_env"
@@ -518,7 +453,6 @@ if [ "$INSTALL_PYSR" = "yes" ]; then
 import juliapkg
 juliapkg.resolve()
 print(f"Julia executable: {juliapkg.executable()}")
-print(f"Julia project:    {juliapkg.project()}")
 PY
 
     python - <<'PY'
@@ -536,57 +470,42 @@ subprocess.run(
     check=True,
 )
 PY
-else
-    echo "INSTALL_PYSR=no — skipping PySR/Julia resolve and precompile."
 fi
 
-# --- CSC SmartRedis and SmartSim releases (both architectures) ---
-# SmartRedis v1.0.0-csc and SmartSim v1.0.3-csc include the CSC
-# platform/compiler fixes, RedisAI JAX backend, direct JAX/Equinox
-# registration, polymorphic JAX batch support, and ARM64 runtimes.
-uv pip install \
-    --link-mode=copy \
-    "smartredis @ git+https://github.com/PentagonToy/SmartRedis.git@v1.0.0-csc"
+# --- Install the unified SmartSim-CSC stack ---
+mkdir -p "$(dirname "$SMARTSIM_CSC_DIR")"
 
-uv pip install \
-    --link-mode=copy \
-    "smartsim @ git+https://github.com/PentagonToy/SmartSim.git@v1.0.3-csc"
+if [ -d "$SMARTSIM_CSC_DIR/.git" ]; then
+    git -C "$SMARTSIM_CSC_DIR" fetch --tags origin
+else
+    rm -rf "$SMARTSIM_CSC_DIR"
+    git clone "$SMARTSIM_CSC_REPO" "$SMARTSIM_CSC_DIR"
+fi
 
-# --- Build the Orchestrator (Redis + RedisAI backends) — both architectures ---
+git -C "$SMARTSIM_CSC_DIR" checkout --detach --force "$SMARTSIM_CSC_REF"
+
 export USE_SYSTEMD=no
+export PYTHONNOUSERSITE=1
 
-smart clobber
-
-smart build \
-    --device cpu \
-    --skip-python-packages
-
-# Restore packages potentially disturbed by the build above
-uv pip install \
-    --link-mode=copy \
-    --requirements "$PYTHON_ROOT/requirements.in"
+PYTHON="$(command -v python)" \
+SMART="$(dirname "$(command -v python)")/smart" \
+PROFILE="$SMARTSIM_CSC_PROFILE" \
+PYTHONNOUSERSITE=1 \
+    "$SMARTSIM_CSC_DIR/scripts/install.sh"
 
 uv pip check
 
-# Record installed versions; SmartSim/SmartRedis excluded (installed
-# fresh from source every build, never replayed).
 python -m pip list --format=freeze \
-    | grep -v '^smartredis==' \
-    | grep -v '^smartsim==' \
-    | sort \
+    | grep -v '^smartredis==' | grep -v '^smartsim==' | sort \
     > "$PYTHON_ROOT/requirements-$ENV_ARCH.txt"
 
 if [ "$INSTALL_PYSR" = "yes" ]; then
     python - <<'PY' > "$PYTHON_ROOT/julia-environment-$ENV_ARCH.txt"
 import juliapkg, subprocess
 julia, project = juliapkg.executable(), juliapkg.project()
-print(f"Julia executable: {julia}")
-print(f"Julia project: {project}\n")
-subprocess.run(
-    [julia, f"--project={project}", "-e",
-     "using InteractiveUtils; versioninfo(); using Pkg; Pkg.status()"],
-    check=True,
-)
+print(f"Julia executable: {julia}\nJulia project: {project}\n")
+subprocess.run([julia, f"--project={project}", "-e",
+    "using InteractiveUtils; versioninfo(); using Pkg; Pkg.status()"], check=True)
 PY
 else
     echo "PySR/Julia was not installed (INSTALL_PYSR=no)." \
@@ -598,37 +517,30 @@ EOF
 chmod +x "$PYTHON_ROOT/extra4SmartSim.sh"
 ```
 
-If `smart build` reports incompatible-pointer-type compile errors on some GCC versions, retry with `CFLAGS="-Wno-incompatible-pointer-types" CXXFLAGS="-Wno-incompatible-pointer-types"` prefixed to the `smart clobber`/`smart build` lines — see Section 13.
+The installer expects `PYTHON`, `SMART`, and `PROFILE` to be provided as environment variables; it reads component paths and the backend list from `stack.toml`, builds Redis + RedisAI + the selected backends, checks Python dependencies, verifies build artifacts, and runs `smart validate` internally.
 
 ---
 
 ## 4. Request a Build Node
 
-> **Tip — downloads:** the SmartRedis/SmartSim fork installs, `smart build`'s automatic backend downloads (TensorFlow, ONNX Runtime, LibTorch from GitHub Releases), and — if `INSTALL_PYSR=yes` — Julia's package resolution all need outbound internet access. If a compute allocation's network is restricted, try the download-heavy steps on the login node first.
+Both the SmartSim-CSC checkout/install and Julia's package resolution (if `INSTALL_PYSR=yes`) need outbound network access. Try download-heavy steps on the login node first if a compute allocation restricts networking.
 
-**x64:**
+**Roihu CPU:**
 
 ```bash
 srun --account="$CSC_PROJECT" \
     --partition=small \
-    --nodes=1 \
-    --ntasks=1 \
-    --cpus-per-task=16 \
-    --time=01:30:00 \
-    --pty bash
+    --nodes=1 --ntasks=1 --cpus-per-task=16 \
+    --time=01:30:00 --pty bash
 ```
 
-**arm64 (Roihu GPU):**
+**Roihu GPU:**
 
 ```bash
-sinteractive \
-    --account "$CSC_PROJECT" \
-    --gpu \
-    --cores 36 \
-    --time 01:30:00
+sinteractive --account "$CSC_PROJECT" --gpu --cores 36 --time 01:30:00
 ```
 
-If Section 1's variables aren't inherited, re-run the matching Global Configuration block (this also re-asks the PySR toggle — answer the same way to stay consistent, or `source "$PYTHON_ROOT/install-options-$ENV_ARCH.sh"` instead to reuse the previous answer without being asked again).
+If Section 1's variables aren't inherited, re-run the Global Configuration block on this node.
 
 ---
 
@@ -638,19 +550,15 @@ If Section 1's variables aren't inherited, re-run the matching Global Configurat
 module purge
 module load tykky
 
+if [ -n "$CUDA_MODULE" ]; then
+    module load "$CUDA_MODULE"
+fi
+
 export TMPDIR="$TMP_BUILD_DIR"
 export CW_BUILD_TMPDIR="$TMP_BUILD_DIR"
-
-# Restore the PySR toggle in case this is a fresh shell on the build node.
 source "$PYTHON_ROOT/install-options-$ENV_ARCH.sh"
 export INSTALL_PYSR
-
-ls -l \
-    "$PYTHON_ROOT/base4SmartSim.yml" \
-    "$PYTHON_ROOT/extra4SmartSim.sh" \
-    "$PYTHON_ROOT/requirements.in"
-
-echo "Building with INSTALL_PYSR=$INSTALL_PYSR"
+export SMARTSIM_CSC_REPO SMARTSIM_CSC_REF SMARTSIM_CSC_DIR SMARTSIM_CSC_PROFILE
 
 rm -rf "$ENV_PREFIX" "$TMP_BUILD_DIR"
 mkdir -p "$TMP_BUILD_DIR"
@@ -661,124 +569,87 @@ conda-containerize new \
     "$PYTHON_ROOT/base4SmartSim.yml"
 ```
 
-Check the result:
-
 ```bash
 ls -ld "$ENV_PREFIX"
 ls -lh "$PYTHON_ROOT/requirements-$ENV_ARCH.txt"
-ls -lh "$PYTHON_ROOT/julia-environment-$ENV_ARCH.txt"
-
 "$ENV_PREFIX/bin/python" -m pip list --format=freeze \
     | grep -E '^(jax|numpy|tensorflow|torch|onnx|onnxruntime|smartsim|smartredis)=='
-
-# Only meaningful if INSTALL_PYSR=yes:
-"$ENV_PREFIX/bin/python" -m pip list --format=freeze | grep -E '^(pysr|julia)=='
 ```
 
 ### 5.1 Prepare the writable PySR / Julia runtime (once, only if `INSTALL_PYSR=yes`)
-
-The Tykky image is read-only, but `juliapkg` needs to write a lock file into the Julia project directory the first time it's used. Rather than doing this copy on every `source` (as in earlier versions of this guide), it now happens **once**, right after the Tykky build succeeds — and only if PySR was actually installed:
 
 ```bash
 source "$PYTHON_ROOT/install-options-$ENV_ARCH.sh"
 
 if [ "$INSTALL_PYSR" = "yes" ]; then
-    echo "Preparing writable PySR / Julia runtime..."
-
     PYTHON_PREFIX="$("$ENV_PREFIX/bin/python" -c 'import sys; print(sys.prefix)')"
     JULIA_ENV_SOURCE="$PYTHON_PREFIX/julia_env"
     JULIA_ENV_RUNTIME="$BASE_SCRATCH/.julia_env_runtime_$ENV_ARCH"
     JULIA_DEPOT_RUNTIME="$BASE_SCRATCH/.julia_depot_runtime_$ENV_ARCH"
 
-    if [ ! -d "$JULIA_ENV_SOURCE" ]; then
-        echo "ERROR: Packaged Julia environment was not found: $JULIA_ENV_SOURCE"
-        echo "       Was this Tykky environment actually built with INSTALL_PYSR=yes?"
-        exit 1
-    fi
+    [ -d "$JULIA_ENV_SOURCE" ] || { echo "ERROR: $JULIA_ENV_SOURCE not found"; exit 1; }
 
     rm -rf "$JULIA_ENV_RUNTIME"
     cp -a "$JULIA_ENV_SOURCE" "$JULIA_ENV_RUNTIME"
     mkdir -p "$JULIA_DEPOT_RUNTIME"
-
-    echo "Julia environment: $JULIA_ENV_RUNTIME"
-    echo "Julia depot:       $JULIA_DEPOT_RUNTIME"
 else
-    echo "INSTALL_PYSR=no — skipping writable Julia runtime preparation."
     rm -rf "$BASE_SCRATCH/.julia_env_runtime_$ENV_ARCH" "$BASE_SCRATCH/.julia_depot_runtime_$ENV_ARCH"
 fi
 ```
 
-Rerun this block (and only this block) if the Tykky environment is rebuilt for this architecture — the packaged Julia project may have changed.
-
-Build the other architecture separately (Section 1 + Section 4). Its `INSTALL_PYSR` choice is independent.
+Build the other architecture separately (Section 1 + Section 4); its `INSTALL_PYSR` choice is independent.
 
 ---
 
 ## 6. Build the SmartRedis Native Library
 
-Needed on **both** architectures for OpenFOAM/C++/Fortran linkage — this is a separate CMake build, unrelated to `smart build`/RedisAI or the Julia toolchain, and unaffected by `INSTALL_PYSR`.
-
-Request a node (Section 4), then set the GCC module for your target system and load compilers:
+Needed on **both** architectures for OpenFOAM/C++/Fortran linkage. The source now comes from the already-checked-out SmartSim-CSC monorepo, not a separate clone.
 
 ```bash
+GCC_MODULE="gcc/13.4.0"
+
+if [ "$ENV_ARCH" = "x64" ]; then
+    CMAKE_MODULE="cmake/3.26.5"
+    CUDA_MODULE=""
+else
+    CMAKE_MODULE="cmake/3.31.11"
+    CUDA_MODULE="cuda/12.9.1"
+fi
+
 module purge
-```
-
-Compilers, e.g. Roihu CPU:
-
-```bash
-# Roihu CPU
-export GCC_MODULE="gcc/13.4.0"
 module load "$GCC_MODULE"
-module load cmake/3.26.5
+module load "$CMAKE_MODULE"
+
+if [ -n "$CUDA_MODULE" ]; then
+    module load "$CUDA_MODULE"
+fi
 ```
 
-Roihu GPU:
-
-```bash
-# Roihu GPU
-export GCC_MODULE="gcc/13.4.0"
-module load "$GCC_MODULE"
-module load cmake/3.31.11
-```
-
-or Mahti:
-
-```bash
-export GCC_MODULE="gcc/13.1.0"
-module load "$GCC_MODULE"
-module load cmake/3.28.6
-module load git
-```
-
-Record the GCC module and the PySR-enabled flag for the loader so it never has to guess:
+Record the runtime modules and PySR flag:
 
 ```bash
 source "$PYTHON_ROOT/install-options-$ENV_ARCH.sh"
 
 cat <<EOF > "$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
 export SMARTSIM_GCC_MODULE="$GCC_MODULE"
+export SMARTSIM_CUDA_MODULE="$CUDA_MODULE"
 export SMARTSIM_PYSR_ENABLED="$INSTALL_PYSR"
 EOF
 chmod 600 "$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
 ```
 
-Clone and build:
+Copy the component out of the checkout and build:
 
 ```bash
-cd "$BASE_SCRATCH"
-rm -rf "$SMARTREDIS_DIR"
+[ -d "$SMARTSIM_CSC_DIR/components/smartredis" ] || { echo "SmartRedis source not found in checkout"; exit 1; }
 
-git clone \
-    --branch v1.0.0-csc \
-    https://github.com/PentagonToy/SmartRedis.git \
-    "$SMARTREDIS_DIR"
+rm -rf "$SMARTREDIS_DIR"
+mkdir -p "$SMARTREDIS_DIR"
+cp -a "$SMARTSIM_CSC_DIR/components/smartredis/." "$SMARTREDIS_DIR/"
 
 cd "$SMARTREDIS_DIR"
 rm -rf build install
-```
 
-```bash
 env \
     -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS \
     -u CC -u CXX -u FC \
@@ -792,7 +663,6 @@ Verify:
 find "$SMARTREDIS_DIR/install" -maxdepth 3 -type f | sort
 
 # If lib64 doesn't exist, use lib.
-ls -la "$SMARTREDIS_DIR/install/lib64"
 test -f "$SMARTREDIS_DIR/install/lib64/libsmartredis-fortran.so" \
     && echo "SmartRedis Fortran library installed successfully."
 ldd "$SMARTREDIS_DIR/install/lib64/libsmartredis-fortran.so"
@@ -802,23 +672,11 @@ ldd "$SMARTREDIS_DIR/install/lib64/libsmartredis-fortran.so"
 
 ## 7. Loader — `Python4SmartSim.sh`
 
-The loader is a **pure environment loader** — it must be *sourced*, not executed, and re-sourcing it repeatedly in the same shell is safe. It:
-
-* validates that the Tykky environment and SmartRedis install exist;
-* reads `runtime-$ENV_ARCH.sh` to learn which GCC module the native SmartRedis library was built against (loading it only if not already loaded, via `module is-loaded`), **and** whether this architecture was built with `INSTALL_PYSR=yes`;
-* prepends to `PATH`, `LD_LIBRARY_PATH`, and `CMAKE_PREFIX_PATH` through a small `path_prepend` helper that skips directories already present, so re-sourcing never creates duplicate entries;
-* configures Julia/PySR environment variables **only if** `SMARTSIM_PYSR_ENABLED=yes` was recorded at build time — otherwise it skips that block entirely, with no error;
-* never copies, deletes, or installs anything.
+Must be *sourced*, not executed; safe to re-source. It auto-detects architecture/profile, validates the Tykky environment and SmartRedis install, loads the recorded GCC and CUDA modules if needed, prepends `PATH`/`LD_LIBRARY_PATH`/`CMAKE_PREFIX_PATH` idempotently, and configures Julia/PySR vars only if this architecture was built with `INSTALL_PYSR=yes`.
 
 ```bash
 cat <<'EOF' > "$BASE_SCRATCH/Python4SmartSim.sh"
 #!/bin/bash
-#
-# SmartSim Python environment loader
-#
-# Usage:
-#   source /scratch/<project>/<user>/Utilities/Python4SmartSim.sh
-
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     echo "This file must be sourced, not executed:"
     echo "    source ${BASH_SOURCE[0]}"
@@ -826,79 +684,48 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 fi
 
 IDENTITY_FILE="$HOME/.config/csc-hpc/identity.sh"
-
-if [ ! -f "$IDENTITY_FILE" ]; then
-    echo "Identity file not found: $IDENTITY_FILE"
-    return 1
-fi
-
+[ -f "$IDENTITY_FILE" ] || { echo "Identity file not found: $IDENTITY_FILE"; return 1; }
 source "$IDENTITY_FILE"
 
 export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
 export PYTHON_BASE="$BASE_SCRATCH/Python"
 export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
+export SMARTSIM_CSC_DIR="$PYTHON_ROOT/src/SmartSim-CSC"
 
 case "$(uname -m)" in
     x86_64)
-        export ENV_ARCH="x64"
-        export KERNEL_ARCH="x86_64"
-        export JAX_PLATFORMS="cpu"
+        export ENV_ARCH="x64" KERNEL_ARCH="x86_64" JAX_PLATFORMS="cpu"
+        export SMARTSIM_CSC_PROFILE="linux-x64-cpu"
         ;;
     aarch64)
-        export ENV_ARCH="arm64"
-        export KERNEL_ARCH="aarch64"
-        export JAX_PLATFORMS="cuda"
+        export ENV_ARCH="arm64" KERNEL_ARCH="aarch64" JAX_PLATFORMS="cuda"
+        export SMARTSIM_CSC_PROFILE="linux-arm64-gpu"
         ;;
     *)
-        echo "Unsupported architecture: $(uname -m)"
-        return 1
-        ;;
+        echo "Unsupported architecture: $(uname -m)"; return 1 ;;
 esac
 
 export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
 export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
 
-if [ ! -x "$ENV_PREFIX/bin/python" ]; then
-    echo "Python environment not found:"
-    echo "    $ENV_PREFIX"
-    return 1
-fi
-
-if [ ! -d "$SMARTREDIS_DIR/install" ]; then
-    echo "SmartRedis installation not found:"
-    echo "    $SMARTREDIS_DIR/install"
-    return 1
-fi
+[ -x "$ENV_PREFIX/bin/python" ] || { echo "Python environment not found: $ENV_PREFIX"; return 1; }
+[ -d "$SMARTREDIS_DIR/install" ] || { echo "SmartRedis installation not found: $SMARTREDIS_DIR/install"; return 1; }
 
 RUNTIME_CONFIG="$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
-
-if [ -f "$RUNTIME_CONFIG" ]; then
-    source "$RUNTIME_CONFIG"
-fi
-
-# Default to "yes" for backward compatibility with environments built before
-# this flag existed (they always installed PySR/Julia).
+[ -f "$RUNTIME_CONFIG" ] && source "$RUNTIME_CONFIG"
 : "${SMARTSIM_PYSR_ENABLED:=yes}"
 
 if [ -n "${SMARTSIM_GCC_MODULE:-}" ] && command -v module >/dev/null 2>&1; then
-    module is-loaded "$SMARTSIM_GCC_MODULE" 2>/dev/null ||
-        module load "$SMARTSIM_GCC_MODULE"
+    module is-loaded "$SMARTSIM_GCC_MODULE" 2>/dev/null || module load "$SMARTSIM_GCC_MODULE"
+fi
+
+if [ -n "${SMARTSIM_CUDA_MODULE:-}" ] && command -v module >/dev/null 2>&1; then
+    module is-loaded "$SMARTSIM_CUDA_MODULE" 2>/dev/null || module load "$SMARTSIM_CUDA_MODULE"
 fi
 
 path_prepend() {
-    local variable_name="$1"
-    local directory="$2"
-    local current_value="${!variable_name-}"
-
-    case ":$current_value:" in
-        *":$directory:"*)
-            ;;
-        *)
-            printf -v "$variable_name" '%s' \
-                "$directory${current_value:+:$current_value}"
-            export "$variable_name"
-            ;;
-    esac
+    local v="$1" d="$2" c="${!1-}"
+    case ":$c:" in *":$d:"*) ;; *) printf -v "$v" '%s' "$d${c:+:$c}"; export "$v" ;; esac
 }
 
 if [ -d "$SMARTREDIS_DIR/install/lib64" ]; then
@@ -906,8 +733,7 @@ if [ -d "$SMARTREDIS_DIR/install/lib64" ]; then
 elif [ -d "$SMARTREDIS_DIR/install/lib" ]; then
     export SMARTREDIS_LIB_DIR="$SMARTREDIS_DIR/install/lib"
 else
-    echo "SmartRedis library directory not found."
-    return 1
+    echo "SmartRedis library directory not found."; return 1
 fi
 
 path_prepend PATH "$ENV_PREFIX/bin"
@@ -915,34 +741,19 @@ path_prepend LD_LIBRARY_PATH "$SMARTREDIS_LIB_DIR"
 path_prepend CMAKE_PREFIX_PATH "$SMARTREDIS_DIR/install"
 
 export SMARTSIM_DB_FILE_PARSE_TRIALS=600
-
 export PYTHON_PREFIX="$("$ENV_PREFIX/bin/python" -c 'import sys; print(sys.prefix)')"
 
 if [ "$SMARTSIM_PYSR_ENABLED" = "yes" ]; then
-    # PySR / Julia runtime paths — prepared ONCE at build time (Sections 5.1/6);
-    # this loader only points environment variables at them.
     export JULIA_ENV_RUNTIME="$BASE_SCRATCH/.julia_env_runtime_$ENV_ARCH"
     export JULIA_DEPOT_RUNTIME="$BASE_SCRATCH/.julia_depot_runtime_$ENV_ARCH"
-
-    if [ ! -d "$JULIA_ENV_RUNTIME" ]; then
-        echo "Writable Julia environment not found:"
-        echo "    $JULIA_ENV_RUNTIME"
-        echo "Run the SmartSim installer again for $ENV_ARCH (Section 5.1)."
-        return 1
-    fi
-
+    [ -d "$JULIA_ENV_RUNTIME" ] || { echo "Writable Julia environment not found: $JULIA_ENV_RUNTIME"; return 1; }
     mkdir -p "$JULIA_DEPOT_RUNTIME"
-
     export PYTHON_JULIAPKG_PROJECT="$JULIA_ENV_RUNTIME"
     export JULIA_DEPOT_PATH="$JULIA_DEPOT_RUNTIME:$PYTHON_PREFIX/julia_depot"
     export PYTHON_JULIAPKG_OFFLINE="yes"
     export PYTHON_JULIACALL_THREADS="${SLURM_CPUS_PER_TASK:-auto}"
-
-    unset PYTHON_JULIACALL_EXE
-    unset PYTHON_JULIACALL_PROJECT
+    unset PYTHON_JULIACALL_EXE PYTHON_JULIACALL_PROJECT
 else
-    # This architecture was built with INSTALL_PYSR=no — make sure no stale
-    # Julia environment variables leak in from a previous session.
     unset JULIA_ENV_RUNTIME JULIA_DEPOT_RUNTIME
     unset PYTHON_JULIAPKG_PROJECT JULIA_DEPOT_PATH PYTHON_JULIAPKG_OFFLINE
     unset PYTHON_JULIACALL_THREADS PYTHON_JULIACALL_EXE PYTHON_JULIACALL_PROJECT
@@ -954,14 +765,8 @@ export JUPYTER_KERNEL_DIR="$HOME/.local/share/jupyter/kernels/$JUPYTER_KERNEL_NA
 
 if [ "${SMARTSIM_ENV_QUIET:-0}" != "1" ]; then
     echo "SmartSim Python environment loaded"
-    echo "ENV_ARCH=$ENV_ARCH"
-    echo "ENV_PREFIX=$ENV_PREFIX"
-    echo "SMARTREDIS_DIR=$SMARTREDIS_DIR"
-    echo "JAX_PLATFORMS=$JAX_PLATFORMS"
+    echo "ENV_ARCH=$ENV_ARCH  PROFILE=$SMARTSIM_CSC_PROFILE  JAX_PLATFORMS=$JAX_PLATFORMS"
     echo "SMARTSIM_PYSR_ENABLED=$SMARTSIM_PYSR_ENABLED"
-    if [ "$SMARTSIM_PYSR_ENABLED" = "yes" ]; then
-        echo "PYTHON_JULIAPKG_PROJECT=$PYTHON_JULIAPKG_PROJECT"
-    fi
 fi
 
 unset -f path_prepend
@@ -969,36 +774,20 @@ EOF
 chmod +x "$BASE_SCRATCH/Python4SmartSim.sh"
 ```
 
-Load it:
-
 ```bash
 source "$BASE_SCRATCH/Python4SmartSim.sh"
-echo "$PYTHON_ROOT"; echo "$ENV_PREFIX"; echo "$SMARTREDIS_DIR"
 python --version
 ```
 
-Confirm re-sourcing doesn't duplicate `PATH`:
-
-```bash
-source "$BASE_SCRATCH/Python4SmartSim.sh"
-source "$BASE_SCRATCH/Python4SmartSim.sh"
-echo "$PATH" | tr ':' '\n' | grep PythonSmartSim
-```
-
-The environment path should appear exactly once.
-
-`SMARTSIM_ENV_QUIET=1` suppresses the status banner — used internally by the Jupyter kernel launcher (Section 8).
+`SMARTSIM_ENV_QUIET=1` suppresses the status banner (used by the Jupyter kernel launcher).
 
 ---
 
 ## 8. Register the Jupyter Kernel
 
-Run once per architecture. Rather than baking `ENV_PREFIX` and Julia/JAX environment variables directly into `kernel.json`, the kernel runs through a small launcher wrapper that sources the exact same loader used interactively — so a notebook kernel always matches a terminal session, including whether PySR/Julia is even configured.
-
 ```bash
 source "$BASE_SCRATCH/Python4SmartSim.sh"
 
-# --- Kernel launcher wrapper ---
 JUPYTER_KERNEL_LAUNCHER="$PYTHON_ROOT/jupyter-kernel-$ENV_ARCH.sh"
 
 cat <<EOF > "$JUPYTER_KERNEL_LAUNCHER"
@@ -1010,28 +799,21 @@ exec "$ENV_PREFIX/bin/python" -m ipykernel_launcher "\$@"
 EOF
 chmod +x "$JUPYTER_KERNEL_LAUNCHER"
 
-# --- kernel.json pointing at the wrapper ---
 mkdir -p "$JUPYTER_KERNEL_DIR"
 
 cat <<EOF > "$JUPYTER_KERNEL_DIR/kernel.json"
 {
-  "argv": [
-    "$JUPYTER_KERNEL_LAUNCHER",
-    "-f",
-    "{connection_file}"
-  ],
+  "argv": ["$JUPYTER_KERNEL_LAUNCHER", "-f", "{connection_file}"],
   "display_name": "$JUPYTER_KERNEL_DISPLAY",
   "language": "python",
-  "metadata": {
-    "debugger": true
-  }
+  "metadata": { "debugger": true }
 }
 EOF
 
 jupyter kernelspec list
 ```
 
-Remove an obsolete kernel: `jupyter kernelspec uninstall -f <kernel_name>`. In VS Code: **Command Palette → Developer: Reload Window**.
+Remove an obsolete kernel: `jupyter kernelspec uninstall -f <kernel_name>`.
 
 ---
 
@@ -1041,51 +823,40 @@ Remove an obsolete kernel: `jupyter kernelspec uninstall -f <kernel_name>`. In V
 source "$BASE_SCRATCH/Python4SmartSim.sh"
 
 python -c "
-import sys
-import numpy, jax, equinox, tensorflow, torch, onnx, onnxruntime
-import smartsim, smartredis
-
-print(f'Python:       {sys.version.split()[0]}')
-print(f'NumPy:        {numpy.__version__}')
-print(f'JAX:          {jax.__version__}  backend={jax.default_backend()}  devices={jax.devices()}')
-print(f'Equinox:      {equinox.__version__}')
-print(f'TensorFlow:   {tensorflow.__version__}')
-print(f'PyTorch:      {torch.__version__}')
-print(f'ONNX:         {onnx.__version__}')
-print(f'ONNXRuntime:  {onnxruntime.__version__}')
-print(f'SmartSim:     {smartsim.__version__}')
-print(f'SmartRedis:   {smartredis.__version__}')
+import sys, numpy, jax, equinox, tensorflow, torch, onnx, onnxruntime, smartsim, smartredis
+print(f'Python:     {sys.version.split()[0]}')
+print(f'NumPy:      {numpy.__version__}')
+print(f'JAX:        {jax.__version__}  backend={jax.default_backend()}  devices={jax.devices()}')
+print(f'TensorFlow: {tensorflow.__version__}')
+print(f'PyTorch:    {torch.__version__}')
+print(f'SmartSim:   {smartsim.__version__}')
+print(f'SmartRedis: {smartredis.__version__}')
 "
-```
 
-```bash
 uv pip check
 smart validate --device cpu
+python "$SMARTSIM_CSC_DIR/scripts/check_versions.py"
+python "$SMARTSIM_CSC_DIR/scripts/stack_config.py" --profile "$SMARTSIM_CSC_PROFILE"
 ```
 
-`smart validate` should report TensorFlow, ONNX Runtime, LibTorch, and JAX backends as available on both architectures — regardless of the PySR toggle.
+`smart validate` should report the ONNX Runtime and JAX backends only (per `stack.toml`) — there is no TensorFlow or LibTorch RedisAI backend in this stack.
 
-**PySR / JuliaCall** (only meaningful if this architecture was built with `INSTALL_PYSR=yes`; should not download or install anything at this point — that already happened at build time):
+**PySR / JuliaCall** (only if `SMARTSIM_PYSR_ENABLED=yes`):
 
 ```bash
 if [ "${SMARTSIM_PYSR_ENABLED:-no}" = "yes" ]; then
     python - <<'PY'
-import juliapkg
-import pysr
+import juliapkg, pysr
 from juliacall import Main as jl
 print(f"PySR version:     {pysr.__version__}")
-print(f"Julia executable: {juliapkg.executable()}")
 print(f"Julia version:    {jl.VERSION}")
 PY
-else
-    echo "PySR/Julia was not installed for $ENV_ARCH (INSTALL_PYSR=no) — nothing to validate here."
 fi
 ```
 
-Native library check (both architectures):
+Native library check:
 
 ```bash
-ls -la "$SMARTREDIS_DIR/install/lib64"
 test -f "$SMARTREDIS_DIR/install/lib64/libsmartredis-fortran.so" \
     && echo "SmartRedis Fortran library is available."
 ```
@@ -1094,22 +865,16 @@ test -f "$SMARTREDIS_DIR/install/lib64/libsmartredis-fortran.so" \
 
 ## 10. Dependency File Workflow
 
-```text
-requirements.in            Human-maintained direct dependencies (not SmartSim/SmartRedis themselves); pysr/julia present only if INSTALL_PYSR=yes
-requirements-$ENV_ARCH.txt Installed-state snapshot (excludes SmartSim/SmartRedis)
-```
-
-**Add/remove a package** — edit `requirements.in`, then rebuild/update (Section 11 or 12). Removing a package needs a full rebuild to drop unused transitive deps.
-
-**Keep `jax[cuda12]` unpinned** to pick up the newest compatible JAX release; `tensorflow` and `torch` remain pinned in `requirements.in`, while ONNX/ONNX Runtime/`protobuf`/`numpy` resolve at build time. Python-side TensorFlow/PyTorch/ONNX Runtime versions are independent of the RedisAI backend binaries `smart build` produces — exact equality isn't required, but validate exported models with `set_model`/`run_model` before production use.
-
-**Turning PySR on or off later** — edit `install-options-$ENV_ARCH.sh` to flip `INSTALL_PYSR`, then re-run Section 3.2 to regenerate `requirements.in` with/without the `pysr`/`julia` lines, and do a **full rebuild** (Section 12). A `conda-containerize update` alone is not reliable for adding or removing the Julia toolchain, since Julia's own dependency resolution and precompilation only happen cleanly in a fresh build.
-
-**Reproduce an exact installed set** — temporarily point `extra4SmartSim.sh`'s two `uv pip install --requirements ...` lines at `requirements-$ENV_ARCH.txt`, rebuild, then switch back.
+* Edit `requirements.in`, then rebuild/update (Section 11 or 12). Removing a package needs a full rebuild.
+* `jax` itself is intentionally **not** in `requirements.in` — it's installed by SmartSim-CSC's `install.sh` for the selected profile.
+* `tensorflow`/`torch` stay pinned; ONNX/ONNX Runtime/NumPy resolve at build time. They are plain Python packages here, not RedisAI backends, so their versions don't need to match RedisAI's own build.
+* Flipping `INSTALL_PYSR` requires regenerating `requirements.in` (Section 3.2) and a **full rebuild** (Section 12); `conda-containerize update` alone is not reliable for adding/removing the Julia toolchain.
 
 ---
 
 ## 11. Updating the Environment
+
+Regular package updates **must not** touch the SmartSim-CSC stack — `smartsim`/`smartredis` are owned by the pinned checkout, not by `uv`/pip.
 
 ```bash
 cat <<'EOF' > "$PYTHON_ROOT/update4SmartSim.sh"
@@ -1129,282 +894,91 @@ export UV_CONCURRENT_DOWNLOADS=4
 mkdir -p "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
 
 python -m pip install --no-cache-dir uv
-
-uv pip install \
-    --link-mode=copy \
-    --requirements "$PYTHON_ROOT/requirements.in"
+uv pip install --link-mode=copy --requirements "$PYTHON_ROOT/requirements.in"
 
 UPDATE_REQUEST="$PYTHON_ROOT/.smartsim-update-$ENV_ARCH.txt"
 if [ -s "$UPDATE_REQUEST" ]; then
-    mapfile -t UPDATE_PACKAGES < "$UPDATE_REQUEST"
-    uv pip install --link-mode=copy --upgrade "${UPDATE_PACKAGES[@]}"
+    mapfile -t PKGS < "$UPDATE_REQUEST"
+    uv pip install --link-mode=copy --upgrade "${PKGS[@]}"
 fi
 
 if [ "$INSTALL_PYSR" = "yes" ]; then
-    # Keep the packaged Julia environment ready for PySR
     PYTHON_PREFIX="$(python -c 'import sys; print(sys.prefix)')"
     export JULIA_DEPOT_PATH="$PYTHON_PREFIX/julia_depot"
     export PYTHON_JULIAPKG_PROJECT="$PYTHON_PREFIX/julia_env"
-
     python - <<'PY'
-import juliapkg
-import pysr
+import juliapkg, pysr
 juliapkg.resolve()
-print(f"PySR version:     {pysr.__version__}")
-print(f"Julia executable: {juliapkg.executable()}")
+print(f"PySR version: {pysr.__version__}")
 PY
-
     python - <<'PY'
 import juliapkg, subprocess
 julia, project = juliapkg.executable(), juliapkg.project()
-subprocess.run(
-    [julia, f"--project={project}", "-e",
-     "using Pkg; Pkg.instantiate(); Pkg.precompile()"],
-    check=True,
-)
+subprocess.run([julia, f"--project={project}", "-e",
+    "using Pkg; Pkg.instantiate(); Pkg.precompile()"], check=True)
 PY
-else
-    echo "INSTALL_PYSR=no — skipping Julia/PySR maintenance during update."
 fi
-
-uv pip install \
-    --link-mode=copy \
-    "smartredis @ git+https://github.com/PentagonToy/SmartRedis.git@v1.0.0-csc"
-
-uv pip install \
-    --link-mode=copy \
-    "smartsim @ git+https://github.com/PentagonToy/SmartSim.git@v1.0.3-csc"
-
-export USE_SYSTEMD=no
-
-smart clobber
-
-smart build \
-    --device cpu \
-    --skip-python-packages
-
-uv pip install \
-    --link-mode=copy \
-    --requirements "$PYTHON_ROOT/requirements.in"
 
 uv pip check
 
 python -m pip list --format=freeze \
-    | grep -v '^smartredis==' \
-    | grep -v '^smartsim==' \
-    | sort \
+    | grep -v '^smartredis==' | grep -v '^smartsim==' | sort \
     > "$PYTHON_ROOT/requirements-$ENV_ARCH.txt"
 
 rm -f "$UPDATE_REQUEST"
 rm -rf "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
 EOF
-
 chmod +x "$PYTHON_ROOT/update4SmartSim.sh"
 ```
 
-Create `smartsim-update`:
-
-```bash
-mkdir -p "$HOME/bin"
-
-cat <<'EOF' > "$HOME/bin/smartsim-update"
-#!/bin/bash -l
-set -e
-
-if [ "$#" -eq 0 ]; then
-    echo "Usage: smartsim-update <package> [package ...]"
-    exit 1
-fi
-
-if [ ! -f "$HOME/.config/csc-hpc/identity.sh" ]; then
-    echo "Identity file not found: $HOME/.config/csc-hpc/identity.sh"
-    exit 1
-fi
-
-source "$HOME/.config/csc-hpc/identity.sh"
-
-export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
-export PYTHON_BASE="$BASE_SCRATCH/Python"
-export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
-
-case "$(uname -m)" in
-    x86_64) export ENV_ARCH="x64" ;;
-    aarch64) export ENV_ARCH="arm64" ;;
-    *) echo "Unsupported architecture: $(uname -m)"; exit 1 ;;
-esac
-
-export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
-export TMP_BUILD_DIR="$BASE_SCRATCH/.tykky_runtime_smartsim_$ENV_ARCH"
-export UPDATE_REQUEST="$PYTHON_ROOT/.smartsim-update-$ENV_ARCH.txt"
-
-if [ -f "$PYTHON_ROOT/install-options-$ENV_ARCH.sh" ]; then
-    source "$PYTHON_ROOT/install-options-$ENV_ARCH.sh"
-fi
-export INSTALL_PYSR="${INSTALL_PYSR:-yes}"
-
-if [ ! -d "$ENV_PREFIX" ]; then
-    echo "Environment not found: $ENV_PREFIX"; exit 1
-fi
-
-if [ ! -f "$PYTHON_ROOT/requirements.in" ]; then
-    echo "requirements.in not found: $PYTHON_ROOT/requirements.in"; exit 1
-fi
-
-for package in "$@"; do
-    package_name="$(printf '%s\n' "$package" | sed -E 's/\[.*//; s/[<>=!~].*//')"
-    case "$package_name" in
-        smartsim|smartredis)
-            echo "$package_name is managed separately and must not be added to requirements.in."
-            exit 1
-            ;;
-        pysr|julia)
-            if [ "$INSTALL_PYSR" != "yes" ]; then
-                echo "$package_name requires INSTALL_PYSR=yes for this architecture."
-                echo "Edit $PYTHON_ROOT/install-options-$ENV_ARCH.sh and do a full rebuild (Section 12) instead."
-                exit 1
-            fi
-            ;;
-    esac
-done
-
-printf '%s\n' "$@" > "$UPDATE_REQUEST"
-
-python - "$PYTHON_ROOT/requirements.in" "$@" <<'PY'
-import re, sys
-from pathlib import Path
-
-requirements_file = Path(sys.argv[1])
-requested = sys.argv[2:]
-lines = requirements_file.read_text().splitlines()
-
-def package_name(spec):
-    return re.split(r"[\[<>=!~]", spec, maxsplit=1)[0].strip().lower()
-
-for spec in requested:
-    name = package_name(spec)
-    replaced = False
-    for index, line in enumerate(lines):
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or " @ " in stripped:
-            continue
-        if package_name(stripped) == name:
-            lines[index] = spec
-            replaced = True
-            print(f"Updated requirement: {spec}")
-            break
-    if not replaced:
-        lines.append(spec)
-        print(f"Added requirement: {spec}")
-
-requirements_file.write_text("\n".join(lines) + "\n")
-PY
-
-module purge
-module load tykky
-
-export TMPDIR="$TMP_BUILD_DIR"
-export CW_BUILD_TMPDIR="$TMP_BUILD_DIR"
-mkdir -p "$TMP_BUILD_DIR"
-
-conda-containerize update \
-    --post-install "$PYTHON_ROOT/update4SmartSim.sh" \
-    "$ENV_PREFIX"
-
-echo "Update completed. Recorded packages: $PYTHON_ROOT/requirements-$ENV_ARCH.txt"
-EOF
-
-chmod +x "$HOME/bin/smartsim-update"
-```
-
-```bash
-grep -qxF 'export PATH="$HOME/bin:$PATH"' ~/.bashrc || \
-    echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-```
-
-Apply on the matching architecture node:
+`smartsim-update` updates ordinary Python packages only. It refuses `smartsim`, `smartredis`, `jax`, `jaxlib`, `jax-cuda12-plugin`, and `jax-cuda12-pjrt` because those packages are managed by SmartSim-CSC. It also refuses `pysr`/`julia` when `INSTALL_PYSR=no` for that architecture:
 
 ```bash
 smartsim-update pydantic
 smartsim-update loguru pyinstrument
 ```
 
-`smartsim-update` refuses `pysr`/`julia` if this architecture was built with `INSTALL_PYSR=no` — see Section 10 for how to switch it on (full rebuild required).
+**To update the SmartSim-CSC stack itself** (new SmartSim/SmartRedis/RedisAI version), pin a new `SMARTSIM_CSC_REF` in Section 1 and rerun the **full installer** (Section 5) for that architecture — `smartsim-update` intentionally cannot do this.
 
-Updating does **not** rebuild the native SmartRedis library, and does **not** refresh the writable Julia runtime copy under `.julia_env_runtime_$ENV_ARCH` — since `conda-containerize update` repacks the Julia project inside the container, re-run the copy step in Section 5.1 afterwards if PySR's Julia dependencies changed (only relevant when `INSTALL_PYSR=yes`).
+Updating also does not refresh the writable Julia runtime copy — re-run Section 5.1 afterward if Julia dependencies changed.
 
 ---
 
 ## 12. Rebuild / Clean Reinstall
 
 ```bash
-# 1) Run the matching Global Configuration block (Section 1) first — this
-#    will re-ask (or let you reuse) the INSTALL_PYSR choice for this architecture.
-echo "ENV_ARCH=$ENV_ARCH"; echo "ENV_PREFIX=$ENV_PREFIX"; echo "SMARTREDIS_DIR=$SMARTREDIS_DIR"
-echo "INSTALL_PYSR=$INSTALL_PYSR"
-
+# Re-run Section 1 first (re-detects arch/profile, re-asks INSTALL_PYSR)
 rm -rf "$ENV_PREFIX" "$TMP_BUILD_DIR"
 mkdir -p "$PYTHON_ROOT/envs" "$TMP_BUILD_DIR"
-# Also clear the writable Julia runtime copy, since it's derived from this build:
 rm -rf "$BASE_SCRATCH/.julia_env_runtime_$ENV_ARCH" "$BASE_SCRATCH/.julia_depot_runtime_$ENV_ARCH"
-# For a full clean install, also: rm -rf "$SMARTREDIS_DIR"
-
-ls -l "$PYTHON_ROOT/base4SmartSim.yml" "$PYTHON_ROOT/requirements.in" "$PYTHON_ROOT/extra4SmartSim.sh"
-chmod +x "$PYTHON_ROOT/extra4SmartSim.sh"
+# For a full clean install, also: rm -rf "$SMARTREDIS_DIR" "$SMARTSIM_CSC_DIR"
 ```
 
-If you changed `INSTALL_PYSR` since the last build, also regenerate `requirements.in` (Section 3.2) before rebuilding, so `pysr`/`julia` are added or removed accordingly.
-
-Request a node (Section 4), then build (Section 5), followed immediately by the one-time Julia runtime preparation (Section 5.1, a no-op if `INSTALL_PYSR=no`). If you removed `$SMARTREDIS_DIR`, rebuild it too (Section 6), which also rewrites `runtime-$ENV_ARCH.sh`.
+If `INSTALL_PYSR` changed, regenerate `requirements.in` (Section 3.2). Build (Section 5) → Julia runtime prep (Section 5.1) → native SmartRedis build (Section 6, only if `$SMARTREDIS_DIR`/`$SMARTSIM_CSC_DIR` were removed).
 
 ---
 
 ## 13. Troubleshooting
 
-**Total reset:**
-```bash
-rm -rf "$ENV_PREFIX" "$TMP_BUILD_DIR"
-mkdir -p "$TMP_BUILD_DIR"
-```
-Rebuild per Section 12.
+**`SmartSim-CSC` checkout keeps re-cloning** — `extra4SmartSim.sh` only clones if `$SMARTSIM_CSC_DIR/.git` is missing; otherwise it fetches and checks out the pinned `SMARTSIM_CSC_REF` in place.
 
-**`requirements-$ENV_ARCH.txt` missing** — only written after a successful build; run Section 5.
+**`scripts/install.sh` fails on profile lookup** — confirm `SMARTSIM_CSC_PROFILE` matches an entry in `$SMARTSIM_CSC_DIR/stack.toml`; run `python scripts/stack_config.py --profile <name>` inside the checkout to debug.
 
-**PySR still gets installed even though I chose "no"** — check `$PYTHON_ROOT/install-options-$ENV_ARCH.sh`; confirm `INSTALL_PYSR="no"` there, that `requirements.in` (Section 3.2) was regenerated *after* setting it, and that Section 5 sourced the same file (`export INSTALL_PYSR` line) before calling `conda-containerize new`.
+**`linux-arm64-gpu` fails or behaves unexpectedly** — confirm that the pinned `SMARTSIM_CSC_REF` contains the profile, load the required CUDA module, and run `smart validate --device gpu` inside a GPU allocation.
 
-**I want to add PySR after skipping it** — edit `install-options-$ENV_ARCH.sh` to `INSTALL_PYSR="yes"`, regenerate `requirements.in` (Section 3.2), and do a full rebuild (Section 12) followed by Section 5.1. `smartsim-update` deliberately refuses to add `pysr`/`julia` for this reason.
+**PySR still installed/missing despite the toggle** — check `install-options-$ENV_ARCH.sh`, confirm `requirements.in` was regenerated after changing it, and that Section 5 exported `INSTALL_PYSR` before calling `conda-containerize new`.
 
-**PySR tries to download Julia/packages at runtime instead of using the precompiled build** — confirm `$JULIA_ENV_RUNTIME` (Section 5.1) exists and that `PYTHON_JULIAPKG_OFFLINE=yes` is set: `python -c "import os; print(os.environ.get('PYTHON_JULIAPKG_OFFLINE'))"` should print `yes`. This only applies if `INSTALL_PYSR=yes` for this architecture.
+**`OSError: Read-only file system` importing `pysr`** — the one-time Julia copy (Section 5.1) was never run or was deleted; re-run it, then re-source the loader.
 
-**`OSError: Read-only file system` when importing `pysr`** — the one-time Julia-project copy (Section 5.1) was never run for this architecture, or its target directory was deleted. Re-run Section 5.1, then re-source `Python4SmartSim.sh`; the loader itself no longer performs any copy and will refuse to load if `$JULIA_ENV_RUNTIME` is missing while `SMARTSIM_PYSR_ENABLED=yes`.
+**Native SmartRedis build fails with missing source** — confirm `$SMARTSIM_CSC_DIR/components/smartredis` exists; if not, the monorepo checkout (Section 5's `extra4SmartSim.sh` step) didn't complete.
 
-**`import pysr` fails with `ModuleNotFoundError`** — this architecture was likely built with `INSTALL_PYSR=no`. Check `runtime-$ENV_ARCH.sh` for `SMARTSIM_PYSR_ENABLED`; if it says `no`, that's expected — see "I want to add PySR after skipping it" above.
+**`smart validate` reports fewer backends than expected** — only `onnxruntime` and `jax` are built by this stack; TensorFlow/LibTorch RedisAI backends are not part of `stack.toml` here.
 
-**"This file must be sourced, not executed" when running the loader** — run it with `source Python4SmartSim.sh`, not `./Python4SmartSim.sh` or `bash Python4SmartSim.sh`.
-
-**`PATH`/`LD_LIBRARY_PATH` grows every time the loader is sourced** — this should no longer happen; the loader's `path_prepend` helper checks for existing entries before prepending. If it does happen, confirm you're using the updated loader from Section 7, not an older version.
-
-**GitHub release installation fails** — confirm outbound network access from the build node and verify that the SmartRedis `v1.0.0-csc` and SmartSim `v1.0.3-csc` tags are accessible.
-
-**`smart build` reports incompatible-pointer-type compile errors** — retry with `CFLAGS="-Wno-incompatible-pointer-types" CXXFLAGS="-Wno-incompatible-pointer-types"` prefixed to `smart clobber`/`smart build`.
-
-**`smart build` rejects `--skip-python-packages`** — run `smart build --help` inside the build environment to get the ground-truth flags for whatever version is installed.
-
-**TensorFlow/PyTorch/ONNX Runtime model compatibility with RedisAI** — Python package versions and RedisAI backend versions are separate and don't need to match exactly. Validate actual exported TensorFlow, TorchScript, and ONNX models with `set_model`/`run_model`. If a model uses operators/formats the RedisAI backend doesn't support, re-export with an older compatible opset or framework format.
-
-**uv hardlink warning** — expected; `--link-mode=copy` handles it.
+**`PATH`/`LD_LIBRARY_PATH` grows on repeated sourcing** — shouldn't happen; the loader's `path_prepend` checks for existing entries.
 
 **Home quota exceeded during build** — caches redirect to `$BASE_SCRATCH/.tykky_runtime_smartsim_*`, not `$HOME`.
 
-**Architecture mismatch** — build and use the matching-architecture Tykky environment; no cross-architecture container.
-
-**JAX reports no GPU** — loader sets `JAX_PLATFORMS` automatically; avoid `JAX_PLATFORMS=gpu`.
-
-**SmartRedis native library not found** — check `$LD_LIBRARY_PATH`, confirm files under `install/lib64` (or `lib`), re-source the loader.
-
-**Jupyter kernel doesn't see the same environment as the terminal** — confirm `kernel.json`'s `argv` points at `jupyter-kernel-$ENV_ARCH.sh` (Section 8), not directly at `$ENV_PREFIX/bin/python`; the wrapper sources the loader before launching `ipykernel_launcher`.
-
-**Import errors after an update** — run `uv pip check`; prefer a full rebuild (Section 12) over stacking updates.
+**Architecture mismatch** — Tykky containers, native SmartRedis, and the SmartSim-CSC profile are all architecture-specific; never mix `x64` and `arm64` artifacts.
 
 **Identity file not found** — go back to Section 0.
 
@@ -1412,17 +986,15 @@ Rebuild per Section 12.
 
 ## 14. SmartSim Deployment Track
 
-Each architecture runs its own local Orchestrator, and can also run JAX/Equinox/TensorFlow/PyTorch(/PySR, if installed) workloads locally:
-
 ```text
-x64 CPU node                              arm64 GPU node
-└─ SmartSim Orchestrator                  └─ SmartSim Orchestrator
-   (Redis + RedisAI: TF/ONNX/LibTorch)       (Redis + RedisAI: TF/ONNX/LibTorch)
-   └─ tensor/weight/metric storage            └─ JAX/Equinox/TF/PyTorch(/PySR) training & inference
-                                                  + tensor/weight/metric storage
+Roihu CPU node                                Roihu GPU node
+└─ SmartSim Orchestrator                       └─ SmartSim Orchestrator
+   (Redis + RedisAI: ONNX Runtime + JAX)          (Redis + RedisAI: ONNX Runtime + JAX)
+   └─ tensor/metric storage                        └─ JAX/Equinox(/PySR) training & inference
+                                                       + tensor/metric storage
 ```
 
-RedisAI model execution is available but optional. TensorFlow, ONNX, and PyTorch (via LibTorch) models can be executed directly inside RedisAI with `set_model`/`run_model`; the primary workflow may still run JAX/Equinox(/PySR) inference in external Python workers, with SmartRedis carrying tensors either way:
+TensorFlow and PyTorch remain available as plain Python libraries for training/inference outside RedisAI; only ONNX and JAX/Equinox models can be registered and executed directly inside RedisAI via `set_model`/`run_model`:
 
 ```python
 from smartredis import Client
@@ -1430,28 +1002,18 @@ import jax.numpy as jnp
 
 client = Client(address="localhost:6379", cluster=False)
 x = jnp.asarray(client.get_tensor("training_data"))
-result = jax_function(x)          # runs on the GPU
+result = jax_function(x)
 client.put_tensor("result", result)
 ```
-
-Other typical workflows: launching OpenFOAM solvers + Python producers/consumers through Slurm; linking external C++/Fortran solvers against the native SmartRedis client; symbolic regression on simulation output with PySR (if installed); validating producer/consumer config with `pydantic`, logging with `loguru`, profiling with `pyinstrument`; DVC-tracked datasets; Papermill-driven notebook pipelines.
-
-Full production architecture and Slurm templates: [SmartSim4CSC](https://github.com/PentagonToy/SmartSim4CSC).
 
 ---
 
 ## Notes
 
-* Python 3.12, built separately per architecture — never mix containers across architectures.
-* **This environment is now a superset of the previously standalone ML stack.** It includes everything the ML environment had — including PySR/Julia when selected — plus SmartSim/SmartRedis and RedisAI's TensorFlow/ONNX Runtime/LibTorch backends. A separate `PythonML/` environment is not needed if you use this stack.
-* **PySR/Julia is optional**, controlled per architecture by `INSTALL_PYSR` (Section 1), persisted to `install-options-$ENV_ARCH.sh`, and recorded again in `runtime-$ENV_ARCH.sh` as `SMARTSIM_PYSR_ENABLED` for the loader to read. Skipping it saves build time and disk space for users who never run symbolic regression; switching it on later requires a full rebuild (Section 10/12), not just an update.
-* SmartSim and SmartRedis install from the CSC releases (`PentagonToy/SmartSim @ v1.0.3-csc`, `PentagonToy/SmartRedis @ v1.0.0-csc`), not PyPI — no runtime patching remains in `extra4SmartSim.sh` / `update4SmartSim.sh`, and neither is affected by the PySR toggle.
-* When `INSTALL_PYSR=yes`, **PySR's Julia dependency is resolved and precompiled at build time**, exactly as in the standalone ML stack, and the writable runtime copy of the Julia project is created **once**, immediately after a successful Tykky build (Section 5.1) — not on every `source`. The Julia depot (precompiled packages) stays read-only and is layered in via `JULIA_DEPOT_PATH`. `PYTHON_JULIAPKG_OFFLINE=yes` prevents any runtime re-download. None of this happens when `INSTALL_PYSR=no`.
-* The loader (`Python4SmartSim.sh`) is a **pure loader**: it must be sourced (not executed), is idempotent across repeated sourcing thanks to a `path_prepend` helper, only loads the GCC module recorded in `runtime-$ENV_ARCH.sh` if it isn't already loaded, and only configures Julia/PySR variables if `SMARTSIM_PYSR_ENABLED=yes` was recorded for this architecture.
-* Jupyter kernels run through a **launcher wrapper** (`jupyter-kernel-$ENV_ARCH.sh`) that sources the loader before starting `ipykernel_launcher`, so notebook kernels — including under VS Code — always match an interactive terminal session, PySR toggle included, rather than duplicating environment variables inside `kernel.json`.
-* `smart build` runs identically on both architectures and builds all three RedisAI backends by default; `--skip-python-packages` is used because TensorFlow/PyTorch/ONNX Python packages are already managed via `requirements.in`.
-* `jax[cuda12]`, `onnx`, `onnxruntime`, `numpy`, and `protobuf` are intentionally unpinned and resolve to the newest compatible versions at build time. The exact installed versions are recorded in `requirements-$ENV_ARCH.txt` — validate the resolved environment with `uv pip check`.
-* Placeholders (`Harry`/`Dumbledore`/`project_xxxxxxx`) are set once in the identity file (Section 0).
-* `requirements.in` = direct deps, not SmartSim/SmartRedis themselves; `requirements-$ENV_ARCH.txt` = installed-state snapshot, not a lockfile.
-* Every `uv pip install` uses `--link-mode=copy`.
-* The native SmartRedis library (Section 6) is unrelated to `smart build`/RedisAI and the Julia toolchain, and is built on both architectures as usual regardless of the PySR toggle. The GCC module needed for it varies by target system (Roihu, Mahti, Puhti) and is recorded once in `runtime-$ENV_ARCH.sh` at build time, alongside the PySR-enabled flag, rather than guessed from hostname at every `source`.
+* This guide now targets **Roihu only**; Puhti and Mahti sections have been removed. Architecture is auto-detected from `uname -m`.
+* SmartSim and SmartRedis come from the **[SmartSim-CSC](https://github.com/PentagonToy/SmartSim-CSC)** monorepo (pinned via `SMARTSIM_CSC_REF`), not from separate forks or PyPI.
+* The `linux-x64-cpu`, `linux-arm64-cpu`, and `linux-arm64-gpu` profiles are validated. The GPU profile was tested on a Roihu GH200 compute node with CUDA 12.9; runtime validation and workloads require a GPU allocation.
+* Only `onnxruntime` and `jax` RedisAI backends are built; TensorFlow and PyTorch remain regular Python packages, not RedisAI backends.
+* **PySR/Julia is optional**, controlled per architecture by `INSTALL_PYSR`, independent of the SmartSim-CSC stack itself.
+* The native SmartRedis library (Section 6) is copied from `components/smartredis` inside the SmartSim-CSC checkout and built per architecture, independent of `install.sh`/RedisAI and the PySR toggle.
+* `smartsim-update` never touches the SmartSim-CSC stack; bumping `SMARTSIM_CSC_REF` and re-running the full installer is the only supported way to update SmartSim/SmartRedis/RedisAI.
