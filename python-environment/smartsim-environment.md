@@ -166,7 +166,7 @@ export PYTHON_BASE="$BASE_SCRATCH/Python"
 export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
 export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
 export SMARTSIM_CSC_REPO="https://github.com/PentagonToy/SmartSim-CSC.git"
-export SMARTSIM_CSC_REF="5e98a2f"
+export SMARTSIM_CSC_REF="0e4926c"
 export SMARTSIM_CSC_DIR="$PYTHON_ROOT/src/SmartSim-CSC"
 export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
 export TMP_BUILD_DIR="$BASE_SCRATCH/.tykky_runtime_smartsim_$ENV_ARCH"
@@ -186,7 +186,7 @@ echo "ENV_ARCH=$ENV_ARCH  PROFILE=$SMARTSIM_CSC_PROFILE  INSTALL_PYSR=$INSTALL_P
 echo "SMARTSIM_CSC_REF=$SMARTSIM_CSC_REF"
 ```
 
-> `SMARTSIM_CSC_REF` currently defaults to the validated commit `5e98a2f`. After these changes are merged and released, replace the commit with the corresponding release tag.
+> `SMARTSIM_CSC_REF` currently defaults to the validated commit `0e4926c`. After these changes are merged and released, replace the commit with the corresponding release tag.
 
 **Directory layout:**
 
@@ -483,6 +483,7 @@ else
 fi
 
 git -C "$SMARTSIM_CSC_DIR" checkout --detach --force "$SMARTSIM_CSC_REF"
+git -C "$SMARTSIM_CSC_DIR" clean -ffdx
 
 export USE_SYSTEMD=no
 export PYTHONNOUSERSITE=1
@@ -492,6 +493,11 @@ SMART="$(dirname "$(command -v python)")/smart" \
 PROFILE="$SMARTSIM_CSC_PROFILE" \
 PYTHONNOUSERSITE=1 \
     "$SMARTSIM_CSC_DIR/scripts/install.sh"
+
+# Restore the user-managed ML environment after SmartSim-CSC installation.
+uv pip install \
+    --link-mode=copy \
+    --requirements "$PYTHON_ROOT/requirements.in"
 
 uv pip check
 
