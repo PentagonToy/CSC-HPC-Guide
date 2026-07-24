@@ -800,6 +800,9 @@ if [ "$BUILD_OPENFOAM" = "yes" ]; then
     cd "$SMARTSIM_CSC_DIR"
     ./scripts/openfoam/build-openfoam-v2412.sh
 
+    export FOAM_USER_APPBIN="$FOAM_USER_DIR/platforms/$WM_OPTIONS/bin"
+    export FOAM_USER_LIBBIN="$FOAM_USER_DIR/platforms/$WM_OPTIONS/lib"
+
     if [ -d "$SMARTREDIS_DIR/install/lib64" ]; then
         SMARTREDIS_LIB_DIR="$SMARTREDIS_DIR/install/lib64"
     else
