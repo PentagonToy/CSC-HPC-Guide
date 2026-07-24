@@ -194,7 +194,7 @@ All normally editable values are grouped at the top of `smartsim-python.sh`:
 
 ```bash
 readonly SMARTSIM_CSC_REPO="https://github.com/PentagonToy/SmartSim-CSC.git"
-readonly SMARTSIM_CSC_REF="fc599b9"
+readonly SMARTSIM_CSC_REF="v1.1.0"
 
 readonly X64_GCC_MODULE="gcc/13.4.0"
 readonly X64_CMAKE_MODULE="cmake/3.26.5"
@@ -1156,7 +1156,7 @@ SmartSim environment loaded: <nickname> (x64), OpenFOAM v2412
 [11/11] Installation complete.
 Load with: source "/scratch/<project>/<project-user>/Utilities/Python4SmartSim.sh"
 Update packages with: smartsim-update <package>
-SmartSim-CSC ref: fc599b9
+SmartSim-CSC ref: v1.1.0
 ```
 
 Reaching `[11/11] Installation complete.` means the Tykky environment, native

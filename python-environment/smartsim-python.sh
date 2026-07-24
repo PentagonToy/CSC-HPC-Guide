@@ -53,7 +53,7 @@ set -Eeuo pipefail
 # Modify only this section when the SmartSim-CSC ref or CSC modules change.
 # ================================================================
 readonly SMARTSIM_CSC_REPO="https://github.com/PentagonToy/SmartSim-CSC.git"
-readonly SMARTSIM_CSC_REF="fc599b9"
+readonly SMARTSIM_CSC_REF="v1.1.0"
 
 readonly X64_GCC_MODULE="gcc/13.4.0"
 readonly X64_CMAKE_MODULE="cmake/3.26.5"
