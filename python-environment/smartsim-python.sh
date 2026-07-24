@@ -2,8 +2,8 @@
 # smartsim-python.sh
 # Interactive installer for the unified Python 3.12 ML + SmartSim/SmartRedis
 # Tykky environment, native SmartRedis library, optional OpenFOAM v2412
-# integration, smartsim-update command, optional PySR/Julia runtime setup,
-# and Jupyter kernel registration.
+# integration, FoamPilot CSC, smartsim-update command, optional PySR/Julia
+# runtime setup, and Jupyter kernel registration.
 #
 # Intended location:
 #   /scratch/$CSC_PROJECT/$PROJECT_USER_DIR/smartsim-python.sh
@@ -221,7 +221,7 @@ echo "CMAKE_MODULE      = $CMAKE_MODULE"
 echo "CUDA_MODULE       = ${CUDA_MODULE:-none}"
 echo "Python            = 3.12"
 echo "SmartSim-CSC repo = https://github.com/PentagonToy/SmartSim-CSC.git"
-echo "SmartSim-CSC ref  = ${SMARTSIM_CSC_REF:-ee7e8e8}"
+echo "SmartSim-CSC ref  = ${SMARTSIM_CSC_REF:-26f42db}"
 echo "SmartSim profile  = $SMARTSIM_CSC_PROFILE"
 if [ "$BUILD_OPENFOAM" = "yes" ]; then
     echo "OpenFOAM v2412    = BUILD on x86_64"
@@ -275,7 +275,7 @@ export PYTHON_BASE="$BASE_SCRATCH/Python"
 export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
 export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
 export SMARTSIM_CSC_REPO="${SMARTSIM_CSC_REPO:-https://github.com/PentagonToy/SmartSim-CSC.git}"
-export SMARTSIM_CSC_REF="${SMARTSIM_CSC_REF:-ee7e8e8}"
+export SMARTSIM_CSC_REF="${SMARTSIM_CSC_REF:-26f42db}"
 export SMARTSIM_CSC_DIR="$PYTHON_ROOT/src/SmartSim-CSC"
 export SMARTSIM_CSC_PROFILE
 export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
@@ -571,6 +571,14 @@ SMART="$(dirname "$(command -v python)")/smart" \
 PROFILE="$SMARTSIM_CSC_PROFILE" \
 PYTHONNOUSERSITE=1 \
     "$SMARTSIM_CSC_DIR/scripts/install.sh"
+
+# Install FoamPilot from the same pinned SmartSim-CSC checkout. SmartSim and
+# SmartRedis are supplied by the unified stack above, so do not resolve public
+# PyPI variants of those packages here.
+uv pip install \
+    --no-deps \
+    --link-mode=copy \
+    "$SMARTSIM_CSC_DIR/components/openfoam-smartsim/python"
 
 # Restore the user-managed ML environment after SmartSim-CSC installation.
 uv pip install \
@@ -1077,8 +1085,8 @@ else
     echo "INSTALL_PYSR=no - skipping Julia/PySR maintenance during update."
 fi
 
-# SmartSim and SmartRedis are owned by the pinned SmartSim-CSC checkout.
-# Package updates must not reinstall or rebuild the SmartSim stack.
+# SmartSim, SmartRedis, and FoamPilot are owned by the pinned SmartSim-CSC
+# checkout. Package updates must not replace the unified stack.
 uv pip check
 
 python -m pip list --format=freeze \
@@ -1158,7 +1166,7 @@ for package in "$@"; do
     package_name="$(printf '%s\n' "$package" | sed -E 's/\[.*//; s/[<>=!~].*//')"
 
     case "$package_name" in
-        smartsim|smartredis|jax|jaxlib|jax-cuda12-plugin|jax-cuda12-pjrt)
+        smartsim|smartredis|foampilot-csc|jax|jaxlib|jax-cuda12-plugin|jax-cuda12-pjrt)
             echo "$package_name is managed by SmartSim-CSC and must not be updated with smartsim-update."
             exit 1
             ;;
@@ -1322,6 +1330,7 @@ else
     echo "    PySR + JuliaCall: SKIPPED (INSTALL_PYSR=no for $ENV_ARCH)"
 fi
 echo "    SmartSim-CSC unified stack"
+echo "    FoamPilot CSC 0.1.2 (import: foampilot)"
 if [ "$BUILD_OPENFOAM" = "yes" ]; then
     echo "    OpenFOAM.com v2412 SmartRedis integration (x86_64)"
 else
