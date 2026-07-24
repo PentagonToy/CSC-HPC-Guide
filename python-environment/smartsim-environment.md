@@ -610,7 +610,8 @@ mkdir -p "$TMP_BUILD_DIR"
 conda-containerize new \
     --prefix "$ENV_PREFIX" \
     --post-install "$PYTHON_ROOT/extra4SmartSim.sh" \
-    "$PYTHON_ROOT/base4SmartSim.yml"
+    "$PYTHON_ROOT/base4SmartSim.yml" \
+    2> >(grep -v '^Unrecognised xattr prefix lustre\.lov$' >&2)
 ```
 
 ```bash
