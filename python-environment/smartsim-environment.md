@@ -25,7 +25,7 @@ The target architecture is **auto-detected** from the node you run the installer
 | `x86_64` (Roihu CPU) | `x64` | `linux-x64-cpu` |
 | `aarch64` (Roihu GPU) | `arm64` | `linux-arm64-gpu` |
 
-The OpenFOAM integration is currently validated only on `x86_64` Roihu CPU nodes with OpenFOAM.com v2412, GCC 15.2.0, and OpenMPI 5.0.10.
+The OpenFOAM integration is currently validated only on `x86_64` Roihu CPU nodes with OpenFOAM.com v2412, GCC 15.2.0, and OpenMPI 5.0.10. On `x86_64`, the installer asks whether to build it; on `aarch64`, the OpenFOAM question is skipped and `BUILD_OPENFOAM=no` is selected automatically.
 
 SmartSim and SmartRedis no longer come from two separate CSC forks. Both are now sourced from a single **[SmartSim-CSC](https://github.com/PentagonToy/SmartSim-CSC)** monorepo, which also bundles the RedisAI source and a `stack.toml` that defines build profiles:
 
@@ -103,10 +103,13 @@ Run the installer on the target Roihu node — architecture is auto-detected
   |     --> run scripts/install.sh PROFILE=linux-x64-cpu (SmartSim+SmartRedis+RedisAI: onnxruntime+jax)
   |     --> uv pip check
   |     --> [if enabled] prepare writable Julia runtime ONCE
-  |     --> build native SmartRedis-$ENV_ARCH library from components/smartredis; record GCC/CUDA modules + PySR flag
+  |     --> build native SmartRedis-$ENV_ARCH library from components/smartredis
+  |     --> ask whether to build the OpenFOAM v2412 integration
+  |     --> record GCC/CUDA modules + PySR/OpenFOAM flags
   |
   +-- Roihu GPU node (aarch64) -> ENV_ARCH=arm64, PROFILE=linux-arm64-gpu
-        same steps as above, using components checked out from SMARTSIM_CSC_REF
+        same Python + SmartSim + SmartRedis steps as above
+        OpenFOAM prompt is skipped automatically (BUILD_OPENFOAM=no)
 
 After the required track(s) are built:
   Create Python4SmartSim.sh --> source Python4SmartSim.sh
@@ -116,7 +119,7 @@ After the required track(s) are built:
   --> Jupyter kernels run through a launcher wrapper that sources the same loader
 ```
 
-Skip the `arm64` track if you do not need Roihu GPU workloads. Each architecture independently chooses `INSTALL_PYSR=yes` or `no`.
+Skip the `arm64` track if you do not need Roihu GPU workloads. Each architecture independently chooses `INSTALL_PYSR=yes` or `no`. OpenFOAM is optional only on the `x64` track and is always skipped on the `arm64` track.
 
 ---
 
@@ -172,7 +175,16 @@ export SMARTSIM_CSC_REPO="https://github.com/PentagonToy/SmartSim-CSC.git"
 export SMARTSIM_CSC_REF="ee7e8e8"
 export SMARTSIM_CSC_DIR="$PYTHON_ROOT/src/SmartSim-CSC"
 export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
+export OPENFOAM_USER_DIR="$BASE_SCRATCH/OpenFOAM/OpenFOAM-v2412"
 export TMP_BUILD_DIR="$BASE_SCRATCH/.tykky_runtime_smartsim_$ENV_ARCH"
+
+if [ "$ENV_ARCH" = "x64" ]; then
+    read -r -p "Build the bundled OpenFOAM v2412 integration? [Y/n]: " _OF
+    case "$_OF" in n|N|no|NO) export BUILD_OPENFOAM="no" ;; *) export BUILD_OPENFOAM="yes" ;; esac
+    unset _OF
+else
+    export BUILD_OPENFOAM="no"
+fi
 
 mkdir -p "$PYTHON_ROOT/envs" "$TMP_BUILD_DIR"
 
@@ -185,7 +197,8 @@ export INSTALL_PYSR="$INSTALL_PYSR"
 EOF
 chmod 600 "$PYTHON_ROOT/install-options-$ENV_ARCH.sh"
 
-echo "ENV_ARCH=$ENV_ARCH  PROFILE=$SMARTSIM_CSC_PROFILE  INSTALL_PYSR=$INSTALL_PYSR"
+echo "ENV_ARCH=$ENV_ARCH  PROFILE=$SMARTSIM_CSC_PROFILE"
+echo "INSTALL_PYSR=$INSTALL_PYSR  BUILD_OPENFOAM=$BUILD_OPENFOAM"
 echo "SMARTSIM_CSC_REF=$SMARTSIM_CSC_REF"
 ```
 
@@ -647,6 +660,7 @@ cat <<EOF > "$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
 export SMARTSIM_GCC_MODULE="$GCC_MODULE"
 export SMARTSIM_CUDA_MODULE="$CUDA_MODULE"
 export SMARTSIM_PYSR_ENABLED="$INSTALL_PYSR"
+export SMARTSIM_OPENFOAM_ENABLED="$BUILD_OPENFOAM"
 EOF
 chmod 600 "$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
 ```
@@ -684,13 +698,15 @@ ldd "$SMARTREDIS_DIR/install/lib64/libsmartredis-fortran.so"
 
 ### 6.1 Build the OpenFOAM v2412 Integration
 
-This step is currently supported and validated on Roihu x86_64 CPU nodes only. It uses the native SmartRedis library built in Section 6.
+This step is supported and validated on Roihu `x86_64` CPU nodes only. The installer asks whether to perform it on `x86_64`; on `aarch64`, it is skipped automatically.
 
-The OpenFOAM module stack uses GCC 15.2.0, while the SmartRedis native library was built with GCC 13.4.0. The tested order is therefore:
+The OpenFOAM module stack uses GCC 15.2.0, while the native SmartRedis library is built with GCC 13.4.0. Use this order:
 
 ```bash
 module --force purge
 source "$BASE_SCRATCH/Python4SmartSim.sh"
+
+export FOAM_USER_DIR="$BASE_SCRATCH/OpenFOAM/OpenFOAM-v2412"
 
 module load gcc/15.2.0
 module load openmpi/5.0.10
@@ -699,16 +715,32 @@ module load openfoam/2412
 
 Do not source `Python4SmartSim.sh` again after loading OpenFOAM, because the loader would restore the SmartRedis build compiler module.
 
-Set the OpenFOAM user installation directory and build the bundled integration:
+Build the bundled integration:
 
 ```bash
-export FOAM_USER_DIR="$BASE_SCRATCH/OpenFOAM/OpenFOAM-v2412"
-
 cd "$SMARTSIM_CSC_DIR"
 ./scripts/openfoam/build-openfoam-v2412.sh
 ```
 
-The build installs the following libraries and executables:
+After the child build script returns, explicitly reconstruct the user binary/library paths in the current shell:
+
+```bash
+export FOAM_USER_APPBIN="$FOAM_USER_DIR/platforms/$WM_OPTIONS/bin"
+export FOAM_USER_LIBBIN="$FOAM_USER_DIR/platforms/$WM_OPTIONS/lib"
+
+if [ -d "$SMARTREDIS_DIR/install/lib64" ]; then
+    export SMARTREDIS_LIB_DIR="$SMARTREDIS_DIR/install/lib64"
+else
+    export SMARTREDIS_LIB_DIR="$SMARTREDIS_DIR/install/lib"
+fi
+
+export PATH="$FOAM_USER_APPBIN:$PATH"
+export LD_LIBRARY_PATH="$SMARTREDIS_LIB_DIR:$FOAM_USER_LIBBIN${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+```
+
+The explicit reassignment is required because environment-variable changes made inside `build-openfoam-v2412.sh` do not propagate back to its parent shell.
+
+Installed outputs:
 
 ```text
 $FOAM_USER_LIBBIN/libsmartRedisClient.so
@@ -720,27 +752,25 @@ $FOAM_USER_APPBIN/foamSmartSimSvdDBAPI
 $FOAM_USER_APPBIN/svdToFoam
 ```
 
-Verify that the executables start and that no shared libraries are missing:
+Verify:
 
 ```bash
-export PATH="$FOAM_USER_APPBIN:$PATH"
+for executable in foamSmartSimSvd foamSmartSimSvdDBAPI svdToFoam; do
+    test -x "$FOAM_USER_APPBIN/$executable"         || { echo "Missing: $FOAM_USER_APPBIN/$executable"; exit 1; }
+done
 
-foamSmartSimSvd -help | tail -4
-foamSmartSimSvdDBAPI -help | tail -4
-svdToFoam -help | tail -4
-
-ldd "$FOAM_USER_APPBIN/foamSmartSimSvdDBAPI"     | grep -E 'not found|smartredis|smartRedisClient'
+ldd "$FOAM_USER_APPBIN/foamSmartSimSvdDBAPI"     | grep 'not found'     && { echo "Unresolved OpenFOAM dependency"; exit 1; }     || echo "OpenFOAM libraries OK"
 ```
 
-Validated runtime results on Roihu x86_64 include:
+Validated end-to-end runtime coverage on Roihu `x86_64`:
 
-- `foamSmartSimSvd`: one pressure tensor with shape `(400, 50)`
-- `foamSmartSimSvdDBAPI`: 50 timestep datasets, each containing a pressure tensor with shape `(400, 1)`
-- metadata dataset value `NTimes=50`
-- SmartRedis C++ → SmartSim database → Python SmartRedis round trip
+- `foamSmartSimSvd`: pressure tensor shape `(400, 50)`
+- `foamSmartSimSvdDBAPI`: 50 timestep datasets, each with pressure shape `(400, 1)`, plus `NTimes=50`
+- `fieldsToSmartRedis`: pressure-field datasets at the first and final timestep, plus `EndTimeIndex=50`
+- `displacementSmartSim`: two OpenFOAM/SmartRedis coupling steps with a zero-displacement ONNX model, output shape `(2176, 2)`, `end_time_index=2`, and successful mesh checks
+- SmartRedis C++ → SmartSim database → Python SmartRedis round trips
 
-The function-object and mesh-motion libraries build and link successfully; their dedicated runtime tests remain pending.
-
+`svdToFoam` is currently build/link verified; a dedicated end-to-end runtime test remains future work.
 
 ---
 
@@ -781,6 +811,7 @@ esac
 
 export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
 export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
+export OPENFOAM_USER_DIR="$BASE_SCRATCH/OpenFOAM/OpenFOAM-v2412"
 
 [ -x "$ENV_PREFIX/bin/python" ] || { echo "Python environment not found: $ENV_PREFIX"; return 1; }
 [ -d "$SMARTREDIS_DIR/install" ] || { echo "SmartRedis installation not found: $SMARTREDIS_DIR/install"; return 1; }
@@ -788,6 +819,7 @@ export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
 RUNTIME_CONFIG="$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
 [ -f "$RUNTIME_CONFIG" ] && source "$RUNTIME_CONFIG"
 : "${SMARTSIM_PYSR_ENABLED:=yes}"
+: "${SMARTSIM_OPENFOAM_ENABLED:=no}"
 
 if [ -n "${SMARTSIM_GCC_MODULE:-}" ] && command -v module >/dev/null 2>&1; then
     module is-loaded "$SMARTSIM_GCC_MODULE" 2>/dev/null || module load "$SMARTSIM_GCC_MODULE"
@@ -841,6 +873,10 @@ if [ "${SMARTSIM_ENV_QUIET:-0}" != "1" ]; then
     echo "SmartSim Python environment loaded"
     echo "ENV_ARCH=$ENV_ARCH  PROFILE=$SMARTSIM_CSC_PROFILE  JAX_PLATFORMS=$JAX_PLATFORMS"
     echo "SMARTSIM_PYSR_ENABLED=$SMARTSIM_PYSR_ENABLED"
+    echo "SMARTSIM_OPENFOAM_ENABLED=$SMARTSIM_OPENFOAM_ENABLED"
+    if [ "$SMARTSIM_OPENFOAM_ENABLED" = "yes" ]; then
+        echo "OPENFOAM_USER_DIR=$OPENFOAM_USER_DIR"
+    fi
 fi
 
 unset -f path_prepend
@@ -931,8 +967,14 @@ fi
 Native library check:
 
 ```bash
-test -f "$SMARTREDIS_DIR/install/lib64/libsmartredis-fortran.so" \
-    && echo "SmartRedis Fortran library is available."
+if [ -f "$SMARTREDIS_DIR/install/lib64/libsmartredis-fortran.so" ]; then
+    echo "SmartRedis Fortran library is available in install/lib64."
+elif [ -f "$SMARTREDIS_DIR/install/lib/libsmartredis-fortran.so" ]; then
+    echo "SmartRedis Fortran library is available in install/lib."
+else
+    echo "SmartRedis Fortran library was not found."
+    exit 1
+fi
 ```
 
 ---
@@ -1058,7 +1100,7 @@ If `INSTALL_PYSR` changed, regenerate `requirements.in` (Section 3.2). Build (Se
 
 **OpenFOAM build links against the wrong compiler runtime** — use the exact module order from Section 6.1 and do not source `Python4SmartSim.sh` again afterward.
 
-**OpenFOAM executable reports a missing `libsmartredis.so`** — confirm that `$SMARTREDIS_DIR/install/lib64` exists and remains in `LD_LIBRARY_PATH`.
+**OpenFOAM executable reports a missing `libsmartRedisClient.so` or another SmartRedis library** — reconstruct `FOAM_USER_APPBIN`/`FOAM_USER_LIBBIN` from `$OPENFOAM_USER_DIR/platforms/$WM_OPTIONS`, select `install/lib64` or `install/lib` as `SMARTREDIS_LIB_DIR`, and prepend both library directories to `LD_LIBRARY_PATH`.
 
 **Identity file not found** — go back to Section 0.
 
@@ -1096,5 +1138,6 @@ client.put_tensor("result", result)
 * Only `onnxruntime` and `jax` RedisAI backends are built; TensorFlow and PyTorch remain regular Python packages, not RedisAI backends.
 * **PySR/Julia is optional**, controlled per architecture by `INSTALL_PYSR`, independent of the SmartSim-CSC stack itself.
 * The native SmartRedis library (Section 6) is copied from `components/smartredis` inside the SmartSim-CSC checkout and built per architecture, independent of `install.sh`/RedisAI and the PySR toggle.
-* The bundled OpenFOAM integration is currently validated on Roihu x86_64 with OpenFOAM.com v2412. ARM64/GH200 OpenFOAM support has not yet been validated.
+* The bundled OpenFOAM integration is validated on Roihu `x86_64` with OpenFOAM.com v2412. The installer asks whether to build it on CPU and skips it automatically on `aarch64` GPU nodes.
+* Runtime tests cover `foamSmartSimSvd`, `foamSmartSimSvdDBAPI`, `fieldsToSmartRedis`, and `displacementSmartSim` with an ONNX model. `svdToFoam` remains build/link verified only.
 * `smartsim-update` never touches the SmartSim-CSC stack; bumping `SMARTSIM_CSC_REF` and re-running the full installer is the only supported way to update SmartSim/SmartRedis/RedisAI.
