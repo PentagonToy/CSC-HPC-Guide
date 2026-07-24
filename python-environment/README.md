@@ -9,7 +9,19 @@ Last updated: 24 July 2026
 >
 > ```bash
 > chmod +x smartsim-python.sh
+> bash smartsim-python.sh --check
 > ./smartsim-python.sh
+> ```
+>
+> `--check` always runs `bash -n`. If `shellcheck` or `shfmt` is available in the
+> current development environment, it also runs those tools. They are not runtime
+> dependencies of the installer.
+>
+> For a long unattended build, run it inside `tmux`. The installer writes the full
+> output to:
+>
+> ```text
+> $PYTHON_ROOT/logs/install-YYYYMMDD-HHMMSS-$ENV_ARCH.log
 > ```
 
 ---
@@ -17,6 +29,21 @@ Last updated: 24 July 2026
 ## Overview & Motivation
 
 This folder deploys a **unified ML + SmartSim/SmartRedis stack on CSC's Roihu supercomputer only** — **JAX + Equinox + TensorFlow + PyTorch + ONNX + SmartSim + SmartRedis + FoamPilot CSC**, with **PySR (JuliaCall)** available as an **optional** add-on, all in one environment. The same SmartSim-CSC checkout also contains the OpenFOAM.com v2412 integration for Roihu x86_64 CPU nodes, including live OpenFOAM-field streaming through FoamPilot and a SmartRedis-backed runtime viscosity model. Puhti and Mahti are no longer targets of this guide.
+
+The installer has two fixed supported targets:
+
+```text
+Python           3.12
+OpenFOAM.com     v2412
+```
+
+These are installer specifications rather than user-configurable parameters. Changing
+them independently would also require revalidating the SmartSim-CSC stack, TensorFlow,
+Tykky packages, OpenFOAM APIs, and compiled plugins.
+
+The only values intended for routine maintenance are concentrated at the top of
+`smartsim-python.sh`: the SmartSim-CSC repository/ref and the CSC compiler, CUDA,
+OpenMPI, and OpenFOAM module selections.
 
 The target architecture is **auto-detected** from the node you run the installer on:
 
@@ -83,7 +110,7 @@ requirements.in                  Human-maintained direct package specs; no smart
 requirements-$ENV_ARCH.txt       Installed-state snapshot recorded after a successful build
 julia-environment-$ENV_ARCH.txt  Julia toolchain/package status; placeholder if INSTALL_PYSR=no
 install-options-$ENV_ARCH.sh     Persists INSTALL_PYSR across sessions
-runtime-$ENV_ARCH.sh             GCC/CUDA modules + PySR-enabled flag, read by the loader every source
+runtime-$ENV_ARCH.sh             GCC/CMake/CUDA/OpenFOAM modules + PySR/OpenFOAM flags, read by the loader
 ```
 
 Build order: install `uv` → install `requirements.in` (TensorFlow, PyTorch, ONNX, `pysr`/`julia` if enabled) → resolve/precompile Julia+PySR (if enabled) → checkout pinned `SmartSim-CSC` ref → run its `scripts/install.sh` for the detected profile (installs SmartSim + SmartRedis, builds Redis + RedisAI + selected backends, runs `smart validate`) → install FoamPilot CSC from the same pinned checkout → `uv pip check` → prepare the writable Julia runtime once, if enabled → build the native SmartRedis library from `components/smartredis` and record its GCC/CUDA modules + PySR-enabled flag → optionally build the OpenFOAM v2412 integration and `smartSimViscosity` runtime model on Roihu x86_64 CPU.
@@ -127,121 +154,136 @@ Skip the `arm64` track if you do not need Roihu GPU workloads. Each architecture
 
 ---
 
-## 0. One-Time Identity Configuration
+## 0. Identity Configuration
 
-Every script needs three values: your CSC project ID, your directory under that project, and the environment nickname. Set them **once**.
+The installer asks for the following values interactively:
 
-> `Harry`, `Dumbledore`, and `project_xxxxxxx` are fictional placeholders. Fill in real values **only here**.
+```text
+CSC project number
+Project user directory name
+Environment nickname
+```
+
+It verifies the project number twice and writes:
+
+```text
+$HOME/.config/csc-hpc/identity.sh
+```
+
+The generated file contains:
 
 ```bash
-mkdir -p "$HOME/.config/csc-hpc"
-
-cat <<'EOF' > "$HOME/.config/csc-hpc/identity.sh"
 export CSC_PROJECT="project_xxxxxxx"
-export PROJECT_USER_DIR="Harry"
-export ENV_NICKNAME="Dumbledore"
-EOF
-
-chmod 600 "$HOME/.config/csc-hpc/identity.sh"
+export PROJECT_USER_DIR="PROJECT_USER_DIR"
+export ENV_NICKNAME="ENVIRONMENT_NICKNAME"
 ```
 
-```bash
-nano "$HOME/.config/csc-hpc/identity.sh"
+Normally, users should not create this file manually. The installer recreates it from
+the confirmed prompt values.
 
-source "$HOME/.config/csc-hpc/identity.sh"
-echo "CSC_PROJECT=$CSC_PROJECT"
-echo "PROJECT_USER_DIR=$PROJECT_USER_DIR"
-echo "ENV_NICKNAME=$ENV_NICKNAME"
-```
+`ENV_ARCH` and `SMARTSIM_CSC_PROFILE` are detected from `uname -m`.
+`INSTALL_PYSR` and `BUILD_OPENFOAM` are selected during installation and persisted
+per architecture.
 
-`ENV_ARCH`, `SMARTSIM_CSC_PROFILE`, and `INSTALL_PYSR` are **not** part of this file — the first two are auto-detected from `uname -m` everywhere, and `INSTALL_PYSR` is chosen per build in Section 1.
 
 ---
 
-## 1. Global Configuration
+## 1. Installer Configuration
 
-Run on the Roihu node matching the architecture you want to build. Architecture and profile are detected automatically; you only choose the PySR toggle.
+All normally editable values are grouped at the top of `smartsim-python.sh`:
 
 ```bash
-source "$HOME/.config/csc-hpc/identity.sh"
+readonly SMARTSIM_CSC_REPO="https://github.com/PentagonToy/SmartSim-CSC.git"
+readonly SMARTSIM_CSC_REF="fc599b9"
 
-case "$(uname -m)" in
-    x86_64)  export ENV_ARCH="x64";  export SMARTSIM_CSC_PROFILE="linux-x64-cpu" ;;
-    aarch64) export ENV_ARCH="arm64"; export SMARTSIM_CSC_PROFILE="linux-arm64-gpu" ;;
-    *) echo "Unsupported Roihu architecture: $(uname -m)"; return 1 ;;
-esac
+readonly X64_GCC_MODULE="gcc/13.4.0"
+readonly X64_CMAKE_MODULE="cmake/3.26.5"
 
-export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
-export PYTHON_BASE="$BASE_SCRATCH/Python"
-export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
-export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
-export SMARTSIM_CSC_REPO="https://github.com/PentagonToy/SmartSim-CSC.git"
-export SMARTSIM_CSC_REF="fc599b9"
-export SMARTSIM_CSC_DIR="$PYTHON_ROOT/src/SmartSim-CSC"
-export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
-export OPENFOAM_USER_DIR="$BASE_SCRATCH/OpenFOAM/OpenFOAM-v2412"
-export TMP_BUILD_DIR="$BASE_SCRATCH/.tykky_runtime_smartsim_$ENV_ARCH"
+readonly ARM64_GCC_MODULE="gcc/14.3.0"
+readonly ARM64_CMAKE_MODULE="cmake/3.31.11"
+readonly ARM64_CUDA_MODULE="cuda/12.9.1"
 
-if [ "$ENV_ARCH" = "x64" ]; then
-    read -r -p "Build the bundled OpenFOAM v2412 integration? [Y/n]: " _OF
-    case "$_OF" in n|N|no|NO) export BUILD_OPENFOAM="no" ;; *) export BUILD_OPENFOAM="yes" ;; esac
-    unset _OF
-else
-    export BUILD_OPENFOAM="no"
-fi
-
-mkdir -p "$PYTHON_ROOT/envs" "$TMP_BUILD_DIR"
-
-read -r -p "Install PySR (symbolic regression) with its Julia toolchain for $ENV_ARCH? [Y/n]: " _A
-case "$_A" in n|N|no|NO) export INSTALL_PYSR="no" ;; *) export INSTALL_PYSR="yes" ;; esac
-unset _A
-
-cat <<EOF > "$PYTHON_ROOT/install-options-$ENV_ARCH.sh"
-export INSTALL_PYSR="$INSTALL_PYSR"
-EOF
-chmod 600 "$PYTHON_ROOT/install-options-$ENV_ARCH.sh"
-
-echo "ENV_ARCH=$ENV_ARCH  PROFILE=$SMARTSIM_CSC_PROFILE"
-echo "INSTALL_PYSR=$INSTALL_PYSR  BUILD_OPENFOAM=$BUILD_OPENFOAM"
-echo "SMARTSIM_CSC_REF=$SMARTSIM_CSC_REF"
+readonly OPENFOAM_GCC_MODULE="gcc/15.2.0"
+readonly OPENFOAM_MPI_MODULE="openmpi/5.0.10"
+readonly OPENFOAM_MODULE="openfoam/2412"
 ```
 
-> `SMARTSIM_CSC_REF` currently defaults to the validated commit `fc599b9`. It includes FoamPilot live field streaming, result cleanup, and the SmartRedis-backed OpenFOAM viscosity model. Replace the commit with a corresponding release tag when one is published.
+Python 3.12 and OpenFOAM.com v2412 remain fixed in the implementation:
 
-**Directory layout:**
+```bash
+python=3.12
+export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
+export OPENFOAM_USER_DIR="$BASE_SCRATCH/OpenFOAM/OpenFOAM-v2412"
+"$SMARTSIM_CSC_DIR/scripts/openfoam/build-openfoam-v2412.sh"
+```
+
+Architecture-specific values are selected by one `detect_architecture()` function:
+
+| Host | Environment | Profile | JAX platform |
+| --- | --- | --- | --- |
+| `x86_64` | `x64` | `linux-x64-cpu` | `cpu` |
+| `aarch64` | `arm64` | `linux-arm64-gpu` | `cuda` |
+
+The installer then derives every user path from the prompted identity:
+
+```bash
+BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
+PYTHON_ROOT="$BASE_SCRATCH/Python/PythonSmartSim"
+ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
+SMARTSIM_CSC_DIR="$PYTHON_ROOT/src/SmartSim-CSC"
+SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
+OPENFOAM_USER_DIR="$BASE_SCRATCH/OpenFOAM/OpenFOAM-v2412"
+```
+
+There are no project-number, CSC username, or project-directory values hard-coded
+for one individual user.
+
+### 1.1 Static self-check
+
+Run this before committing or distributing a modified installer:
+
+```bash
+bash smartsim-python.sh --check
+```
+
+The check performs:
+
+1. `bash -n` unconditionally,
+2. `shellcheck` when available,
+3. `shfmt -d -i 4 -ci -bn` when available.
+
+Missing ShellCheck or shfmt does not prevent installation because they are
+development-time tools, not runtime dependencies.
+
+Recommended formatting command during development:
+
+```bash
+shfmt -w -i 4 -ci -bn smartsim-python.sh
+shellcheck smartsim-python.sh
+```
+
+### 1.2 Logging and failure reporting
+
+After paths are initialized, the installer creates:
 
 ```text
-/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities/          # $BASE_SCRATCH
-├── .tykky_runtime_smartsim_x64/
-├── .tykky_runtime_smartsim_arm64/
-├── .julia_env_runtime_x64/       # ONCE after Tykky build (5.1) — only if INSTALL_PYSR=yes
-├── .julia_env_runtime_arm64/
-├── .julia_depot_runtime_x64/
-├── .julia_depot_runtime_arm64/
-├── Python4SmartSim.sh
-├── SmartRedis-x64/                                  # native install, $SMARTREDIS_DIR
-├── SmartRedis-arm64/
-├── OpenFOAM/
-│   └── OpenFOAM-v2412/                  # x86_64 OpenFOAM user build/install area
-└── Python/                                           # $PYTHON_BASE
-    └── PythonSmartSim/                               # $PYTHON_ROOT
-        ├── base4SmartSim.yml
-        ├── extra4SmartSim.sh
-        ├── update4SmartSim.sh
-        ├── requirements.in
-        ├── requirements-x64.txt
-        ├── requirements-arm64.txt
-        ├── julia-environment-x64.txt
-        ├── julia-environment-arm64.txt
-        ├── install-options-x64.sh
-        ├── install-options-arm64.sh
-        ├── runtime-x64.sh
-        ├── runtime-arm64.sh
-        ├── jupyter-kernel-x64.sh
-        ├── jupyter-kernel-arm64.sh
-        ├── src/SmartSim-CSC/                # $SMARTSIM_CSC_DIR — pinned monorepo checkout
-        └── envs/
+$PYTHON_ROOT/logs/install-YYYYMMDD-HHMMSS-$ENV_ARCH.log
 ```
+
+Standard output and standard error are displayed normally and appended to that file
+through `tee`.
+
+With `set -Eeuo pipefail` and the `ERR` trap, an installation failure reports:
+
+```text
+Installation failed.
+Step:    <current installer step>
+Command: <failing command>
+Log:     <timestamped log file>
+```
+
+This makes a detached `tmux` build diagnosable without repeating the full install.
+
 
 ---
 
@@ -677,7 +719,11 @@ source "$PYTHON_ROOT/install-options-$ENV_ARCH.sh"
 
 cat <<EOF > "$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
 export SMARTSIM_GCC_MODULE="$GCC_MODULE"
+export SMARTSIM_CMAKE_MODULE="$CMAKE_MODULE"
 export SMARTSIM_CUDA_MODULE="$CUDA_MODULE"
+export SMARTSIM_OPENFOAM_GCC_MODULE="$OPENFOAM_GCC_MODULE"
+export SMARTSIM_OPENFOAM_MPI_MODULE="$OPENFOAM_MPI_MODULE"
+export SMARTSIM_OPENFOAM_MODULE="$OPENFOAM_MODULE"
 export SMARTSIM_PYSR_ENABLED="$INSTALL_PYSR"
 export SMARTSIM_OPENFOAM_ENABLED="$BUILD_OPENFOAM"
 EOF
@@ -723,9 +769,9 @@ The installer loads the OpenFOAM module stack and runs the bundled build script:
 
 ```bash
 module --force purge
-module load gcc/15.2.0
-module load openmpi/5.0.10
-module load openfoam/2412
+module load "$OPENFOAM_GCC_MODULE"
+module load "$OPENFOAM_MPI_MODULE"
+module load "$OPENFOAM_MODULE"
 
 # Override CSC module defaults with this user's project-scoped location.
 export FOAM_USER_DIR="$OPENFOAM_USER_DIR"
@@ -733,7 +779,7 @@ export WM_PROJECT_USER_DIR="$OPENFOAM_USER_DIR"
 export FOAM_USER_APPBIN="$OPENFOAM_USER_DIR/platforms/$WM_OPTIONS/bin"
 export FOAM_USER_LIBBIN="$OPENFOAM_USER_DIR/platforms/$WM_OPTIONS/lib"
 
-export SMARTREDIS_INCLUDE="$SMARTSIM_CSC_DIR/components/smartredis/include"
+export SMARTREDIS_INCLUDE="$SMARTREDIS_DIR/install/include"
 export SMARTREDIS_DEP_INCLUDE="$SMARTREDIS_DIR/install/include"
 
 if [ -d "$SMARTREDIS_DIR/install/lib64" ]; then
@@ -745,7 +791,7 @@ fi
 mkdir -p "$FOAM_USER_APPBIN" "$FOAM_USER_LIBBIN"
 
 cd "$SMARTSIM_CSC_DIR"
-./scripts/openfoam/build-openfoam-v2412.sh
+"$SMARTSIM_CSC_DIR/scripts/openfoam/build-openfoam-v2412.sh"
 
 # Reassert the same project-scoped paths before verification.
 export FOAM_USER_DIR="$OPENFOAM_USER_DIR"
@@ -978,7 +1024,10 @@ export SMARTREDIS_LIB="$SMARTREDIS_LIB_DIR"
 if [ "$SMARTSIM_OPENFOAM_ENABLED" = "yes" ] && [ "$ENV_ARCH" = "x64" ]; then
     if command -v module >/dev/null 2>&1; then
         module --force purge
-        module load gcc/15.2.0 openmpi/5.0.10 openfoam/2412
+        module load \
+            "$SMARTSIM_OPENFOAM_GCC_MODULE" \
+            "$SMARTSIM_OPENFOAM_MPI_MODULE" \
+            "$SMARTSIM_OPENFOAM_MODULE"
     fi
 
     export FOAM_USER_DIR="$OPENFOAM_USER_DIR"
@@ -1093,6 +1142,26 @@ jupyter kernelspec list
 ```
 
 Remove an obsolete kernel: `jupyter kernelspec uninstall -f <kernel_name>`.
+
+---
+
+## 8.1 Successful installer completion
+
+A completed x64 installation with OpenFOAM enabled ends with output equivalent to:
+
+```text
+[9/11] Creating loader and update tooling...
+[10/11] Registering the Jupyter kernel...
+SmartSim environment loaded: <nickname> (x64), OpenFOAM v2412
+[11/11] Installation complete.
+Load with: source "/scratch/<project>/<project-user>/Utilities/Python4SmartSim.sh"
+Update packages with: smartsim-update <package>
+SmartSim-CSC ref: fc599b9
+```
+
+Reaching `[11/11] Installation complete.` means the Tykky environment, native
+SmartRedis libraries, optional OpenFOAM integration, loader, update command, and
+Jupyter kernel were all created successfully.
 
 ---
 
@@ -1236,19 +1305,64 @@ Updating also does not refresh the writable Julia runtime copy — re-run Sectio
 
 ## 12. Rebuild / Clean Reinstall
 
+The supported rebuild workflow is to rerun the same installer on the target
+architecture:
+
 ```bash
-# Re-run Section 1 first (re-detects arch/profile, re-asks INSTALL_PYSR)
-rm -rf "$ENV_PREFIX" "$TMP_BUILD_DIR"
-mkdir -p "$PYTHON_ROOT/envs" "$TMP_BUILD_DIR"
-rm -rf "$BASE_SCRATCH/.julia_env_runtime_$ENV_ARCH" "$BASE_SCRATCH/.julia_depot_runtime_$ENV_ARCH"
-# For a full clean install, also: rm -rf "$SMARTREDIS_DIR" "$SMARTSIM_CSC_DIR"
+bash smartsim-python.sh --check
+./smartsim-python.sh
 ```
 
-If `INSTALL_PYSR` changed, regenerate `requirements.in` (Section 3.2). Build (Section 5) → Julia runtime prep (Section 5.1) → native SmartRedis build (Section 6, only if `$SMARTREDIS_DIR`/`$SMARTSIM_CSC_DIR` were removed).
+The installer itself removes and recreates the architecture-specific Tykky
+environment and native SmartRedis tree:
+
+```text
+$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH
+$SMARTREDIS_DIR
+$TMP_BUILD_DIR
+```
+
+It also refreshes the architecture-specific `install-options-*.sh`,
+`runtime-*.sh`, loader, update helper, and Jupyter kernel.
+
+For a deliberately deeper reset, the user may additionally remove the pinned
+SmartSim-CSC checkout before rerunning:
+
+```bash
+source "$HOME/.config/csc-hpc/identity.sh"
+
+case "$(uname -m)" in
+    x86_64) ENV_ARCH="x64" ;;
+    aarch64) ENV_ARCH="arm64" ;;
+    *) echo "Unsupported architecture: $(uname -m)"; exit 1 ;;
+esac
+
+BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
+PYTHON_ROOT="$BASE_SCRATCH/Python/PythonSmartSim"
+
+rm -rf "$PYTHON_ROOT/src/SmartSim-CSC"
+```
+
+Normally this extra deletion is unnecessary because the installer fetches the
+existing repository, force-checks out the pinned ref, and cleans untracked files.
+
 
 ---
 
 ## 13. Troubleshooting
+
+**Find the installer log** — each run prints and writes a timestamped file under
+`$PYTHON_ROOT/logs/`. Use `tail -f <log-file>` from another SSH session or after
+reattaching to `tmux`.
+
+**Installer exits with a step and command report** — inspect the printed `Step`,
+`Command`, and `Log` fields. The reported command is the Bash command active when the
+`ERR` trap fired.
+
+**OpenFOAM output is incorrectly searched under `/users/r_inst_apps`** — the current
+installer explicitly reasserts `FOAM_USER_DIR`, `WM_PROJECT_USER_DIR`,
+`FOAM_USER_APPBIN`, and `FOAM_USER_LIBBIN` from `$OPENFOAM_USER_DIR` both before and
+after the centralized OpenFOAM build. Do not replace those paths with module defaults.
 
 **`SmartSim-CSC` checkout keeps re-cloning** — `extra4SmartSim.sh` only clones if `$SMARTSIM_CSC_DIR/.git` is missing; otherwise it fetches and checks out the pinned `SMARTSIM_CSC_REF` in place.
 
@@ -1308,6 +1422,12 @@ client.put_tensor("result", result)
 
 ## Notes
 
+* The installer uses `set -Eeuo pipefail`, a step-aware `ERR` trap, and timestamped
+  `tee` logging.
+* `bash smartsim-python.sh --check` performs Bash syntax checking and optionally runs
+  ShellCheck and shfmt when those tools are available.
+* Python 3.12 and OpenFOAM.com v2412 are fixed supported targets, not exposed as
+  independent version parameters.
 * This guide now targets **Roihu only**; Puhti and Mahti sections have been removed. Architecture is auto-detected from `uname -m`.
 * SmartSim and SmartRedis come from the **[SmartSim-CSC](https://github.com/PentagonToy/SmartSim-CSC)** monorepo (pinned via `SMARTSIM_CSC_REF`), not from separate forks or PyPI.
 * FoamPilot CSC is installed from `components/openfoam-smartsim/python` in the same pinned checkout. Its distribution name is `foampilot-csc`, while Python code imports `foampilot`.
