@@ -221,7 +221,7 @@ echo "CMAKE_MODULE      = $CMAKE_MODULE"
 echo "CUDA_MODULE       = ${CUDA_MODULE:-none}"
 echo "Python            = 3.12"
 echo "SmartSim-CSC repo = https://github.com/PentagonToy/SmartSim-CSC.git"
-echo "SmartSim-CSC ref  = ${SMARTSIM_CSC_REF:-19a5143}"
+echo "SmartSim-CSC ref  = ${SMARTSIM_CSC_REF:-fc599b9}"
 echo "SmartSim profile  = $SMARTSIM_CSC_PROFILE"
 if [ "$BUILD_OPENFOAM" = "yes" ]; then
     echo "OpenFOAM v2412    = BUILD on x86_64"
@@ -275,7 +275,7 @@ export PYTHON_BASE="$BASE_SCRATCH/Python"
 export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
 export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
 export SMARTSIM_CSC_REPO="${SMARTSIM_CSC_REPO:-https://github.com/PentagonToy/SmartSim-CSC.git}"
-export SMARTSIM_CSC_REF="${SMARTSIM_CSC_REF:-19a5143}"
+export SMARTSIM_CSC_REF="${SMARTSIM_CSC_REF:-fc599b9}"
 export SMARTSIM_CSC_DIR="$PYTHON_ROOT/src/SmartSim-CSC"
 export SMARTSIM_CSC_PROFILE
 export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
@@ -798,14 +798,6 @@ if [ "$BUILD_OPENFOAM" = "yes" ]; then
 
     cd "$SMARTSIM_CSC_DIR"
     ./scripts/openfoam/build-openfoam-v2412.sh
-
-    export FOAM_USER_APPBIN="$FOAM_USER_DIR/platforms/$WM_OPTIONS/bin"
-    export FOAM_USER_LIBBIN="$FOAM_USER_DIR/platforms/$WM_OPTIONS/lib"
-    mkdir -p "$FOAM_USER_APPBIN" "$FOAM_USER_LIBBIN"
-
-    cd "$SMARTSIM_CSC_DIR/components/openfoam-smartsim/src/smartSimViscosityModel"
-    wclean
-    wmake libso
 
     if [ -d "$SMARTREDIS_DIR/install/lib64" ]; then
         SMARTREDIS_LIB_DIR="$SMARTREDIS_DIR/install/lib64"
