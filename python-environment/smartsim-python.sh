@@ -32,7 +32,92 @@
 # dependency-workflow notes, troubleshooting, and deployment examples from
 # the full guide.
 
-set -e
+# shellcheck shell=bash
+
+set -Eeuo pipefail
+
+# ================================================================
+# FIXED INSTALLATION TARGETS
+#   Python:       3.12
+#   OpenFOAM.com: v2412
+#
+# These values are part of the supported SmartSim-CSC stack and must not be
+# changed independently.
+#
+# USER CONFIGURATION
+# Modify only this section when the SmartSim-CSC ref or CSC modules change.
+# ================================================================
+readonly SMARTSIM_CSC_REPO="https://github.com/PentagonToy/SmartSim-CSC.git"
+readonly SMARTSIM_CSC_REF="fc599b9"
+
+readonly X64_GCC_MODULE="gcc/13.4.0"
+readonly X64_CMAKE_MODULE="cmake/3.26.5"
+
+readonly ARM64_GCC_MODULE="gcc/14.3.0"
+readonly ARM64_CMAKE_MODULE="cmake/3.31.11"
+readonly ARM64_CUDA_MODULE="cuda/12.9.1"
+
+readonly OPENFOAM_GCC_MODULE="gcc/15.2.0"
+readonly OPENFOAM_MPI_MODULE="openmpi/5.0.10"
+readonly OPENFOAM_MODULE="openfoam/2412"
+
+# ================================================================
+# INTERNAL SETTINGS
+# Do not normally edit below this line.
+# ================================================================
+CURRENT_STEP="initialisation"
+LOG_FILE=""
+
+handle_error() {
+    local exit_code=$?
+
+    printf '\nInstallation failed.\n' >&2
+    printf 'Step:    %s\n' "$CURRENT_STEP" >&2
+    printf 'Command: %s\n' "$BASH_COMMAND" >&2
+    printf 'Log:     %s\n' "${LOG_FILE:-not initialised}" >&2
+    exit "$exit_code"
+}
+trap handle_error ERR
+
+run_self_check() {
+    local failed=0
+
+    if command -v bash >/dev/null 2>&1; then
+        bash -n "$0" || failed=1
+    fi
+
+    if command -v shellcheck >/dev/null 2>&1; then
+        shellcheck "$0" || failed=1
+    else
+        echo "ShellCheck not found; skipping static analysis."
+    fi
+
+    if command -v shfmt >/dev/null 2>&1; then
+        shfmt -d -i 4 -ci -bn "$0" || failed=1
+    else
+        echo "shfmt not found; skipping formatting check."
+    fi
+
+    return "$failed"
+}
+
+if [ "${1:-}" = "--check" ]; then
+    run_self_check
+    exit
+fi
+
+start_logging() {
+    local log_dir
+
+    log_dir="$PYTHON_ROOT/logs"
+    LOG_FILE="$log_dir/install-$(date '+%Y%m%d-%H%M%S')-$ENV_ARCH.log"
+
+    mkdir -p "$log_dir"
+    exec > >(tee -a "$LOG_FILE") 2>&1
+
+    echo "Installation log: $LOG_FILE"
+    echo
+}
 
 echo "=================================================================="
 echo " Unified ML + SmartSim Environment Installer (Roihu only)"
@@ -99,17 +184,30 @@ detect_architecture() {
     case "$(uname -m)" in
         x86_64)
             ENV_ARCH="x64"
+            KERNEL_ARCH="x86_64"
             SMARTSIM_CSC_PROFILE="linux-x64-cpu"
+            GCC_MODULE="$X64_GCC_MODULE"
+            CMAKE_MODULE="$X64_CMAKE_MODULE"
+            CUDA_MODULE=""
+            JAX_PLATFORMS="cpu"
             ;;
         aarch64)
             ENV_ARCH="arm64"
+            KERNEL_ARCH="aarch64"
             SMARTSIM_CSC_PROFILE="linux-arm64-gpu"
+            GCC_MODULE="$ARM64_GCC_MODULE"
+            CMAKE_MODULE="$ARM64_CMAKE_MODULE"
+            CUDA_MODULE="$ARM64_CUDA_MODULE"
+            JAX_PLATFORMS="cuda"
             ;;
         *)
-            echo "Unsupported Roihu architecture: $(uname -m)" >&2
+            printf 'Unsupported Roihu architecture: %s\n' "$(uname -m)" >&2
             exit 1
             ;;
     esac
+
+    export ENV_ARCH KERNEL_ARCH SMARTSIM_CSC_PROFILE
+    export GCC_MODULE CMAKE_MODULE CUDA_MODULE JAX_PLATFORMS
 }
 
 # ------------------------------------------------------------------
@@ -199,17 +297,6 @@ echo
 echo "--- Optional OpenFOAM integration ---"
 prompt_build_openfoam
 
-# Roihu compiler and CUDA modules.
-if [ "$ENV_ARCH" = "x64" ]; then
-    GCC_MODULE="gcc/13.4.0"
-    CMAKE_MODULE="cmake/3.26.5"
-    CUDA_MODULE=""
-else
-    GCC_MODULE="gcc/14.3.0"
-    CMAKE_MODULE="cmake/3.31.11"
-    CUDA_MODULE="cuda/12.9.1"
-fi
-
 echo
 echo "--- Configuration ---"
 echo "CSC_PROJECT       = $CSC_PROJECT"
@@ -220,8 +307,8 @@ echo "GCC_MODULE        = $GCC_MODULE"
 echo "CMAKE_MODULE      = $CMAKE_MODULE"
 echo "CUDA_MODULE       = ${CUDA_MODULE:-none}"
 echo "Python            = 3.12"
-echo "SmartSim-CSC repo = https://github.com/PentagonToy/SmartSim-CSC.git"
-echo "SmartSim-CSC ref  = ${SMARTSIM_CSC_REF:-fc599b9}"
+echo "SmartSim-CSC repo = $SMARTSIM_CSC_REPO"
+echo "SmartSim-CSC ref  = $SMARTSIM_CSC_REF"
 echo "SmartSim profile  = $SMARTSIM_CSC_PROFILE"
 if [ "$BUILD_OPENFOAM" = "yes" ]; then
     echo "OpenFOAM v2412    = BUILD on x86_64"
@@ -245,7 +332,8 @@ echo
 # ------------------------------------------------------------------
 # 2. Identity file
 # ------------------------------------------------------------------
-echo "[1/10] Writing identity file..."
+CURRENT_STEP="Writing identity file"
+echo "[1/11] $CURRENT_STEP..."
 
 mkdir -p "$HOME/.config/csc-hpc"
 
@@ -263,7 +351,8 @@ echo
 # ------------------------------------------------------------------
 # 3. Global paths
 # ------------------------------------------------------------------
-echo "[2/10] Setting paths..."
+CURRENT_STEP="Setting paths"
+echo "[2/11] $CURRENT_STEP..."
 
 source "$HOME/.config/csc-hpc/identity.sh"
 
@@ -274,8 +363,7 @@ export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
 export PYTHON_BASE="$BASE_SCRATCH/Python"
 export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
 export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
-export SMARTSIM_CSC_REPO="${SMARTSIM_CSC_REPO:-https://github.com/PentagonToy/SmartSim-CSC.git}"
-export SMARTSIM_CSC_REF="${SMARTSIM_CSC_REF:-fc599b9}"
+export SMARTSIM_CSC_REPO SMARTSIM_CSC_REF
 export SMARTSIM_CSC_DIR="$PYTHON_ROOT/src/SmartSim-CSC"
 export SMARTSIM_CSC_PROFILE
 export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
@@ -305,10 +393,13 @@ echo "      INSTALL_PYSR=$INSTALL_PYSR"
 echo "      Recorded: $PYTHON_ROOT/install-options-$ENV_ARCH.sh"
 echo
 
+start_logging
+
 # ------------------------------------------------------------------
 # 4. Configuration files
 # ------------------------------------------------------------------
-echo "[3/10] Creating configuration files..."
+CURRENT_STEP="Creating configuration files"
+echo "[3/11] $CURRENT_STEP..."
 
 mkdir -p "$PYTHON_ROOT"
 
@@ -633,7 +724,8 @@ echo
 # ------------------------------------------------------------------
 # 5. Build Tykky environment
 # ------------------------------------------------------------------
-echo "[4/10] Building the Tykky environment..."
+CURRENT_STEP="Building the Tykky environment"
+echo "[4/11] $CURRENT_STEP..."
 
 module purge
 module load tykky
@@ -698,7 +790,8 @@ echo
 # ------------------------------------------------------------------
 # 6. Native SmartRedis library
 # ------------------------------------------------------------------
-echo "[5/10] Loading native-build modules..."
+CURRENT_STEP="Loading native-build modules"
+echo "[5/11] $CURRENT_STEP..."
 
 module purge
 module load "$GCC_MODULE"
@@ -712,13 +805,18 @@ echo
 # never has to guess.
 cat <<EOF > "$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
 export SMARTSIM_GCC_MODULE="$GCC_MODULE"
+export SMARTSIM_CMAKE_MODULE="$CMAKE_MODULE"
 export SMARTSIM_CUDA_MODULE="$CUDA_MODULE"
+export SMARTSIM_OPENFOAM_GCC_MODULE="$OPENFOAM_GCC_MODULE"
+export SMARTSIM_OPENFOAM_MPI_MODULE="$OPENFOAM_MPI_MODULE"
+export SMARTSIM_OPENFOAM_MODULE="$OPENFOAM_MODULE"
 export SMARTSIM_PYSR_ENABLED="$INSTALL_PYSR"
 export SMARTSIM_OPENFOAM_ENABLED="$BUILD_OPENFOAM"
 EOF
 chmod 600 "$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
 
-echo "[6/10] Building the native SmartRedis library..."
+CURRENT_STEP="Building the native SmartRedis library"
+echo "[6/11] $CURRENT_STEP..."
 
 if [ ! -d "$SMARTSIM_CSC_DIR/components/smartredis" ]; then
     echo "SmartRedis source was not found in the SmartSim-CSC checkout:"
@@ -740,7 +838,8 @@ env \
     make lib-with-fortran
 
 echo
-echo "[7/10] Verifying the native SmartRedis library..."
+CURRENT_STEP="Verifying the native SmartRedis library"
+echo "[7/11] $CURRENT_STEP..."
 
 find "$SMARTREDIS_DIR/install" -maxdepth 3 -type f | sort
 
@@ -767,7 +866,8 @@ echo
 # 6b. Optional OpenFOAM v2412 integration (x86_64 only)
 # ------------------------------------------------------------------
 if [ "$BUILD_OPENFOAM" = "yes" ]; then
-    echo "[8/11] Building the OpenFOAM v2412 integration..."
+    CURRENT_STEP="Building the OpenFOAM v2412 integration"
+echo "[8/11] $CURRENT_STEP..."
 
     if [ "$ENV_ARCH" != "x64" ]; then
         echo "ERROR: OpenFOAM integration is currently supported only on x86_64."
@@ -781,9 +881,9 @@ if [ "$BUILD_OPENFOAM" = "yes" ]; then
     fi
 
     module --force purge
-    module load gcc/15.2.0
-    module load openmpi/5.0.10
-    module load openfoam/2412
+    module load "$OPENFOAM_GCC_MODULE"
+    module load "$OPENFOAM_MPI_MODULE"
+    module load "$OPENFOAM_MODULE"
 
     # Override CSC module defaults with this user's project-scoped location.
     export FOAM_USER_DIR="$OPENFOAM_USER_DIR"
@@ -803,7 +903,7 @@ if [ "$BUILD_OPENFOAM" = "yes" ]; then
     mkdir -p "$FOAM_USER_APPBIN" "$FOAM_USER_LIBBIN"
 
     cd "$SMARTSIM_CSC_DIR"
-    ./scripts/openfoam/build-openfoam-v2412.sh
+    "$SMARTSIM_CSC_DIR/scripts/openfoam/build-openfoam-v2412.sh"
 
     # Reassert project-scoped paths in the installer shell before validation.
     export FOAM_USER_DIR="$OPENFOAM_USER_DIR"
@@ -857,7 +957,8 @@ module load "$CMAKE_MODULE"
 # ------------------------------------------------------------------
 # 7. Loader
 # ------------------------------------------------------------------
-echo "[9/11] Creating loader and update tooling..."
+CURRENT_STEP="Creating loader and update tooling"
+echo "[9/11] $CURRENT_STEP..."
 
 cat <<'EOF' > "$BASE_SCRATCH/Python4SmartSim.sh"
 #!/bin/bash
@@ -948,7 +1049,10 @@ export SMARTREDIS_LIB="$SMARTREDIS_LIB_DIR"
 if [ "$SMARTSIM_OPENFOAM_ENABLED" = "yes" ] && [ "$ENV_ARCH" = "x64" ]; then
     if command -v module >/dev/null 2>&1; then
         module --force purge
-        module load gcc/15.2.0 openmpi/5.0.10 openfoam/2412
+        module load \
+            "$SMARTSIM_OPENFOAM_GCC_MODULE" \
+            "$SMARTSIM_OPENFOAM_MPI_MODULE" \
+            "$SMARTSIM_OPENFOAM_MODULE"
     fi
 
     export FOAM_USER_DIR="$OPENFOAM_USER_DIR"
@@ -1254,7 +1358,8 @@ echo
 # ------------------------------------------------------------------
 # 10. Jupyter kernel
 # ------------------------------------------------------------------
-echo "[10/11] Registering the Jupyter kernel..."
+CURRENT_STEP="Registering the Jupyter kernel"
+echo "[10/11] $CURRENT_STEP..."
 
 source "$BASE_SCRATCH/Python4SmartSim.sh"
 
@@ -1303,7 +1408,8 @@ if command -v jupyter >/dev/null 2>&1; then
     jupyter kernelspec list 2>/dev/null || true
 fi
 
-echo "[11/11] Installation complete."
+CURRENT_STEP="Installation complete"
+echo "[11/11] $CURRENT_STEP."
 echo "Load with: source \"$BASE_SCRATCH/Python4SmartSim.sh\""
 echo "Update packages with: smartsim-update <package>"
-echo "SmartSim-CSC ref: ${SMARTSIM_CSC_REF:-fc599b9}"
+echo "SmartSim-CSC ref: $SMARTSIM_CSC_REF"
