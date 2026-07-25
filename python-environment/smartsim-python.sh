@@ -769,19 +769,31 @@ echo
 if [ "$INSTALL_PYSR" = "yes" ]; then
     echo "      Preparing writable PySR / Julia runtime..."
 
-    PYTHON_PREFIX="$("$ENV_PREFIX/bin/python" -c 'import sys; print(sys.prefix)')"
-    JULIA_ENV_SOURCE="$PYTHON_PREFIX/julia_env"
     JULIA_ENV_RUNTIME="$BASE_SCRATCH/.julia_env_runtime_$ENV_ARCH"
     JULIA_DEPOT_RUNTIME="$BASE_SCRATCH/.julia_depot_runtime_$ENV_ARCH"
 
-    if [ ! -d "$JULIA_ENV_SOURCE" ]; then
-        echo "ERROR: Packaged Julia environment was not found:"
-        echo "       $JULIA_ENV_SOURCE"
-        exit 1
-    fi
-
     rm -rf "$JULIA_ENV_RUNTIME"
-    cp -a "$JULIA_ENV_SOURCE" "$JULIA_ENV_RUNTIME"
+
+    JULIA_ENV_RUNTIME="$JULIA_ENV_RUNTIME" \
+        "$ENV_PREFIX/bin/python" - <<'PY'
+import os
+import shutil
+import sys
+from pathlib import Path
+
+source = Path(sys.prefix) / "julia_env"
+target = Path(os.environ["JULIA_ENV_RUNTIME"])
+
+if not source.is_dir():
+    raise SystemExit(
+        "Packaged Julia environment was not found inside the Tykky image:\n"
+        f"    {source}"
+    )
+
+shutil.copytree(source, target)
+print(f"      Copied Julia environment: {source} -> {target}")
+PY
+
     mkdir -p "$JULIA_DEPOT_RUNTIME"
 
     echo "      Julia environment: $JULIA_ENV_RUNTIME"
