@@ -369,10 +369,10 @@ export PYTHON_BASE="$BASE_SCRATCH/Python"
 export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
 export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
 export SMARTSIM_CSC_REPO SMARTSIM_CSC_REF
-export SMARTSIM_CSC_DIR="$PYTHON_ROOT/src/SmartSim-CSC"
+export SMARTSIM_CSC_DIR="$PYTHON_ROOT/SmartSim-CSC"
 export SMARTSIM_CSC_PROFILE
-export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
-export OPENFOAM_USER_DIR="$BASE_SCRATCH/OpenFOAM/OpenFOAM-v2412"
+export SMARTREDIS_DIR="$PYTHON_ROOT/SmartRedis-$ENV_ARCH"
+export OPENFOAM_USER_DIR="$PYTHON_ROOT/OpenFOAM/OpenFOAM-v2412"
 export TMP_BUILD_DIR="$BASE_SCRATCH/.tykky_runtime_smartsim_$ENV_ARCH"
 
 mkdir -p "$PYTHON_ROOT/envs" "$TMP_BUILD_DIR"
@@ -495,6 +495,7 @@ umap-learn
 # --- Physics & CFD ---
 cantera
 foamlib
+foampilot-csc
 meshio
 
 # --- Mathematical Tools ---
@@ -668,14 +669,6 @@ SMART="$(dirname "$(command -v python)")/smart" \
 PROFILE="$SMARTSIM_CSC_PROFILE" \
 PYTHONNOUSERSITE=1 \
     "$SMARTSIM_CSC_DIR/scripts/install.sh"
-
-# Install FoamPilot from the same pinned SmartSim-CSC checkout. SmartSim and
-# SmartRedis are supplied by the unified stack above, so do not resolve public
-# PyPI variants of those packages here.
-uv pip install \
-    --no-deps \
-    --link-mode=copy \
-    "$SMARTSIM_CSC_DIR/components/openfoam-smartsim/python"
 
 # Restore the user-managed ML environment after SmartSim-CSC installation.
 uv pip install \
@@ -948,11 +941,6 @@ echo "[8/11] $CURRENT_STEP..."
         fi
     done
 
-    if [ ! -f "$FOAM_USER_LIBBIN/libsmartSimViscosityModels.so" ]; then
-        echo "ERROR: Missing OpenFOAM library: $FOAM_USER_LIBBIN/libsmartSimViscosityModels.so"
-        exit 1
-    fi
-
     if ldd "$FOAM_USER_APPBIN/foamSmartSimSvdDBAPI" | grep -q "not found"; then
         echo "ERROR: OpenFOAM executable has unresolved shared libraries."
         ldd "$FOAM_USER_APPBIN/foamSmartSimSvdDBAPI"
@@ -997,8 +985,7 @@ source "$IDENTITY_FILE"
 export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
 export PYTHON_BASE="$BASE_SCRATCH/Python"
 export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
-export SMARTSIM_CSC_DIR="$PYTHON_ROOT/src/SmartSim-CSC"
-export FOAMPILOT_SRC="$SMARTSIM_CSC_DIR/components/openfoam-smartsim/python"
+export SMARTSIM_CSC_DIR="$PYTHON_ROOT/SmartSim-CSC"
 
 case "$(uname -m)" in
     x86_64)
@@ -1020,10 +1007,10 @@ case "$(uname -m)" in
 esac
 
 export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
-export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
+export SMARTREDIS_DIR="$PYTHON_ROOT/SmartRedis-$ENV_ARCH"
 export SMARTREDIS_INCLUDE="$SMARTSIM_CSC_DIR/components/smartredis/include"
 export SMARTREDIS_DEP_INCLUDE="$SMARTREDIS_DIR/install/include"
-export OPENFOAM_USER_DIR="$BASE_SCRATCH/OpenFOAM/OpenFOAM-v2412"
+export OPENFOAM_USER_DIR="$PYTHON_ROOT/OpenFOAM/OpenFOAM-v2412"
 
 if [ ! -x "$ENV_PREFIX/bin/python" ]; then
     echo "Python environment not found: $ENV_PREFIX"
@@ -1092,7 +1079,6 @@ else
 fi
 
 path_prepend PATH "$ENV_PREFIX/bin"
-path_prepend PYTHONPATH "$FOAMPILOT_SRC"
 path_prepend LD_LIBRARY_PATH "$SMARTREDIS_LIB_DIR"
 path_prepend CMAKE_PREFIX_PATH "$SMARTREDIS_DIR/install"
 
@@ -1215,8 +1201,8 @@ else
     echo "INSTALL_PYSR=no - skipping Julia/PySR maintenance during update."
 fi
 
-# SmartSim, SmartRedis, and FoamPilot are owned by the pinned SmartSim-CSC
-# checkout. Package updates must not replace the unified stack.
+# SmartSim and SmartRedis are owned by the pinned SmartSim-CSC checkout.
+# Package updates must not replace the unified core stack.
 uv pip check
 
 python -m pip list --format=freeze \
@@ -1296,7 +1282,7 @@ for package in "$@"; do
     package_name="$(printf '%s\n' "$package" | sed -E 's/\[.*//; s/[<>=!~].*//')"
 
     case "$package_name" in
-        smartsim|smartredis|foampilot-csc|jax|jaxlib|jax-cuda12-plugin|jax-cuda12-pjrt)
+        smartsim|smartredis|jax|jaxlib|jax-cuda12-plugin|jax-cuda12-pjrt)
             echo "$package_name is managed by SmartSim-CSC and must not be updated with smartsim-update."
             exit 1
             ;;
