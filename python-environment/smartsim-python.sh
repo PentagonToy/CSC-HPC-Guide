@@ -869,7 +869,8 @@ else
     exit 1
 fi
 
-ldd "$SMARTREDIS_DIR/install/$LIB_DIR/libsmartredis-fortran.so"
+LD_LIBRARY_PATH="$SMARTREDIS_DIR/install/$LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+    ldd "$SMARTREDIS_DIR/install/$LIB_DIR/libsmartredis-fortran.so"
 echo
 
 # ------------------------------------------------------------------
