@@ -124,11 +124,16 @@ hostname
 From the Roihu GPU login node:
 
 ```bash
-sinteractive \
-    --account project_xxxxxxxx \
-    --gpu \
-    --cores 36 \
-    --time 09:00:00
+srun \
+    --partition=gpuinteractive \
+    --account=project_2015384 \
+    --nodes=1 \
+    --ntasks=1 \
+    --cpus-per-task=4 \
+    --gres=gpu:gh200:1 \
+    --mem=24G \
+    --time=02:00:00 \
+    --pty bash
 ```
 
 This GPU interactive allocation requests:
