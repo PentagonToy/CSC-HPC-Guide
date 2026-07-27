@@ -16,7 +16,7 @@ Last updated: 24 July 2026
 
 ## Overview & Motivation
 
-This folder deploys a **unified ML + SmartSim/SmartRedis stack on CSC's Roihu supercomputer only** — **JAX + Equinox + TensorFlow + PyTorch + ONNX + SmartSim + SmartRedis + FoamPilot CSC**, with **PySR (JuliaCall)** available as an **optional** add-on, all in one environment. The same SmartSim-CSC checkout also contains the OpenFOAM.com v2412 integration for Roihu x86_64 CPU nodes, including live OpenFOAM-field streaming through FoamPilot and a SmartRedis-backed runtime viscosity model. Puhti and Mahti are no longer targets of this guide.
+This folder deploys a **unified ML + SmartSim/SmartRedis stack on CSC's Roihu supercomputer only** — **JAX + Equinox + TensorFlow + PyTorch + ONNX + SmartSim + SmartRedis + FoamPilot CSC**, with **PySR (JuliaCall)** available as an **optional** add-on, all in one environment. The same SmartSim-CSC checkout also contains the OpenFOAM.com v2412 integration for Roihu x86_64 CPU nodes, including bidirectional OpenFOAM-field exchange through FoamPilot and a SmartRedis-backed runtime viscosity model. Puhti and Mahti are no longer targets of this guide.
 
 The target architecture is **auto-detected** from the node you run the installer on:
 
@@ -67,7 +67,7 @@ SmartSim         1.0.0+csc
 SmartRedis       1.0.0+csc
 RedisAI          1.2.7, backends: onnxruntime + jax (per stack.toml)
 OpenFOAM         v2412 integration validated on Roihu x86_64 CPU
-FoamPilot CSC    0.1.2 (`pip install foampilot-csc`, import package `foampilot`)
+FoamPilot CSC    1.0.1 (`pip install foampilot-csc`, import package `foampilot`)
 Field streaming  OpenFOAM → SmartRedis → NumPy/Jupyter at every solver timestep
 Runtime coupling SmartRedis → OpenFOAM through `smartSimViscosity`
 JAX              installed by SmartSim-CSC's install.sh, not requirements.in
@@ -176,7 +176,7 @@ export PYTHON_BASE="$BASE_SCRATCH/Python"
 export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
 export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
 export SMARTSIM_CSC_REPO="https://github.com/PentagonToy/SmartSim-CSC.git"
-export SMARTSIM_CSC_REF="fc599b9"
+export SMARTSIM_CSC_REF="6b1e284660b184e87a373c0c73388c311a6ef0e8"
 export SMARTSIM_CSC_DIR="$PYTHON_ROOT/src/SmartSim-CSC"
 export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
 export OPENFOAM_USER_DIR="$BASE_SCRATCH/OpenFOAM/OpenFOAM-v2412"
@@ -206,7 +206,7 @@ echo "INSTALL_PYSR=$INSTALL_PYSR  BUILD_OPENFOAM=$BUILD_OPENFOAM"
 echo "SMARTSIM_CSC_REF=$SMARTSIM_CSC_REF"
 ```
 
-> `SMARTSIM_CSC_REF` currently defaults to the validated commit `fc599b9`. It includes FoamPilot live field streaming, result cleanup, and the SmartRedis-backed OpenFOAM viscosity model. Replace the commit with a corresponding release tag when one is published.
+> `SMARTSIM_CSC_REF` currently defaults to the validated commit `6b1e284660b184e87a373c0c73388c311a6ef0e8`. It includes FoamPilot bidirectional field exchange, live field streaming, result cleanup, and the SmartRedis-backed OpenFOAM viscosity model. Replace the commit with a corresponding release tag when one is published.
 
 **Directory layout:**
 
@@ -256,7 +256,7 @@ echo "SMARTSIM_CSC_REF=$SMARTSIM_CSC_REF"
 | SmartRedis | 1.0.0+csc | Python client + native C++/Fortran library; direct JAX/Equinox registration |
 | RedisAI | 1.2.7 | Backends selected per profile: `onnxruntime`, `jax` |
 | OpenFOAM | v2412 | Optional x86_64 integration built from `components/openfoam-smartsim` |
-| FoamPilot CSC | 0.1.2 | Python orchestration layer for OpenFOAM + SmartSim workflows; installed from the pinned SmartSim-CSC checkout |
+| FoamPilot CSC | 1.0.1 | Python orchestration layer for OpenFOAM + SmartSim workflows; installed from the pinned SmartSim-CSC checkout |
 | JAX / Equinox / distrax / distreqx | installed by `install.sh` | Autodiff / training / inference |
 | TensorFlow | 2.18.1 | Python framework only — not a RedisAI backend here |
 | PyTorch | 2.7.1 | Python framework only — not a RedisAI backend here |
