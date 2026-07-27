@@ -495,7 +495,6 @@ umap-learn
 # --- Physics & CFD ---
 cantera
 foamlib
-foampilot-csc
 meshio
 
 # --- Mathematical Tools ---
@@ -594,6 +593,13 @@ python -m pip install --no-cache-dir uv
 uv pip install \
     --link-mode=copy \
     --requirements "$PYTHON_ROOT/requirements.in"
+
+# Install FoamPilot from the pinned SmartSim-CSC checkout so that its
+# Python API matches the OpenFOAM integration built from the same ref.
+uv pip install \
+    --link-mode=copy \
+    --no-deps \
+    "$SMARTSIM_CSC_DIR/components/openfoam-smartsim/python"
 
 if [ "$INSTALL_PYSR" = "yes" ]; then
     echo "INSTALL_PYSR=yes - resolving and precompiling PySR's Julia dependency..."
