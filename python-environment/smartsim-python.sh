@@ -594,12 +594,12 @@ uv pip install \
     --link-mode=copy \
     --requirements "$PYTHON_ROOT/requirements.in"
 
-# Install FoamPilot from the pinned SmartSim-CSC checkout so that its
-# Python API matches the OpenFOAM integration built from the same ref.
+# Install FoamPilot from the same pinned SmartSim-CSC ref. The Tykky
+# post-install environment cannot access the host-side source checkout.
 uv pip install \
     --link-mode=copy \
     --no-deps \
-    "$SMARTSIM_CSC_DIR/components/openfoam-smartsim/python"
+    "git+${SMARTSIM_CSC_REPO}@${SMARTSIM_CSC_REF}#subdirectory=components/openfoam-smartsim/python"
 
 if [ "$INSTALL_PYSR" = "yes" ]; then
     echo "INSTALL_PYSR=yes - resolving and precompiling PySR's Julia dependency..."
