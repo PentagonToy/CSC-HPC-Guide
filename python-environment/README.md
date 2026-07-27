@@ -176,7 +176,7 @@ export PYTHON_BASE="$BASE_SCRATCH/Python"
 export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
 export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
 export SMARTSIM_CSC_REPO="https://github.com/PentagonToy/SmartSim-CSC.git"
-export SMARTSIM_CSC_REF="a28cdb96f8cc55629a7e8317ac4cb51a4e66a30a"
+export SMARTSIM_CSC_REF="688dedb7ae45524d8753ca43463b8aa70d34d0e9"
 export SMARTSIM_CSC_DIR="$PYTHON_ROOT/src/SmartSim-CSC"
 export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
 export OPENFOAM_USER_DIR="$BASE_SCRATCH/OpenFOAM/OpenFOAM-v2412"
@@ -206,7 +206,7 @@ echo "INSTALL_PYSR=$INSTALL_PYSR  BUILD_OPENFOAM=$BUILD_OPENFOAM"
 echo "SMARTSIM_CSC_REF=$SMARTSIM_CSC_REF"
 ```
 
-> `SMARTSIM_CSC_REF` currently defaults to the validated commit `a28cdb96f8cc55629a7e8317ac4cb51a4e66a30a`. It includes FoamPilot bidirectional field exchange, coordinate-aware field streaming, automatic OpenFOAM decomposition and MPI execution, transparent MPI field aggregation/scattering, result cleanup, and the SmartRedis-backed OpenFOAM viscosity model. Replace the commit with a corresponding release tag when one is published.
+> `SMARTSIM_CSC_REF` currently defaults to the validated commit `688dedb7ae45524d8753ca43463b8aa70d34d0e9`. It includes FoamPilot bidirectional field exchange, blocking and optional handshake modes, configurable optional timeout, physical-time metadata, coordinate-aware field streaming, automatic OpenFOAM decomposition and MPI execution, transparent MPI field aggregation/scattering, and the SmartRedis-backed OpenFOAM viscosity model. Replace the commit with a corresponding release tag when one is published.
 
 **Directory layout:**
 
