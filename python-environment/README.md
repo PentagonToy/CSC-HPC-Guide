@@ -31,7 +31,7 @@ SmartSim and SmartRedis no longer come from two separate CSC forks. Both are now
 
 ```text
 Component      Version
-SmartSim-CSC   1.1.0
+SmartSim-CSC   1.1.1
 SmartSim       1.0.0+csc
 SmartRedis     1.0.0+csc
 RedisAI        1.2.7
@@ -176,7 +176,7 @@ export PYTHON_BASE="$BASE_SCRATCH/Python"
 export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
 export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
 export SMARTSIM_CSC_REPO="https://github.com/PentagonToy/SmartSim-CSC.git"
-export SMARTSIM_CSC_REF="6b1e284660b184e87a373c0c73388c311a6ef0e8"
+export SMARTSIM_CSC_REF="a28cdb96f8cc55629a7e8317ac4cb51a4e66a30a"
 export SMARTSIM_CSC_DIR="$PYTHON_ROOT/src/SmartSim-CSC"
 export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
 export OPENFOAM_USER_DIR="$BASE_SCRATCH/OpenFOAM/OpenFOAM-v2412"
@@ -206,7 +206,7 @@ echo "INSTALL_PYSR=$INSTALL_PYSR  BUILD_OPENFOAM=$BUILD_OPENFOAM"
 echo "SMARTSIM_CSC_REF=$SMARTSIM_CSC_REF"
 ```
 
-> `SMARTSIM_CSC_REF` currently defaults to the validated commit `6b1e284660b184e87a373c0c73388c311a6ef0e8`. It includes FoamPilot bidirectional field exchange, live field streaming, result cleanup, and the SmartRedis-backed OpenFOAM viscosity model. Replace the commit with a corresponding release tag when one is published.
+> `SMARTSIM_CSC_REF` currently defaults to the validated commit `a28cdb96f8cc55629a7e8317ac4cb51a4e66a30a`. It includes FoamPilot bidirectional field exchange, coordinate-aware field streaming, automatic OpenFOAM decomposition and MPI execution, transparent MPI field aggregation/scattering, result cleanup, and the SmartRedis-backed OpenFOAM viscosity model. Replace the commit with a corresponding release tag when one is published.
 
 **Directory layout:**
 
@@ -251,7 +251,7 @@ echo "SMARTSIM_CSC_REF=$SMARTSIM_CSC_REF"
 | --- | --- | --- |
 | Python | 3.12 | Base interpreter |
 | uv | latest at build | Resolution, installation, `uv pip check` |
-| SmartSim-CSC | 1.1.0, pinned ref | Monorepo providing SmartSim, SmartRedis, RedisAI sources + `scripts/install.sh` |
+| SmartSim-CSC | 1.1.1, pinned ref | Monorepo providing SmartSim, SmartRedis, RedisAI sources + `scripts/install.sh` |
 | SmartSim | 1.0.0+csc | Orchestration; Redis, RedisAI, JAX worker lifecycle |
 | SmartRedis | 1.0.0+csc | Python client + native C++/Fortran library; direct JAX/Equinox registration |
 | RedisAI | 1.2.7 | Backends selected per profile: `onnxruntime`, `jax` |

@@ -53,7 +53,7 @@ set -Eeuo pipefail
 # Modify only this section when the SmartSim-CSC ref or CSC modules change.
 # ================================================================
 readonly SMARTSIM_CSC_REPO="https://github.com/PentagonToy/SmartSim-CSC.git"
-readonly SMARTSIM_CSC_REF="6b1e284660b184e87a373c0c73388c311a6ef0e8"
+readonly SMARTSIM_CSC_REF="a28cdb96f8cc55629a7e8317ac4cb51a4e66a30a"
 
 readonly X64_GCC_MODULE="gcc/13.4.0"
 readonly X64_CMAKE_MODULE="cmake/3.26.5"
@@ -911,6 +911,7 @@ echo "[8/11] $CURRENT_STEP..."
         export SMARTREDIS_LIB="$SMARTREDIS_DIR/install/lib"
     fi
 
+    rm -rf "$OPENFOAM_USER_DIR"
     mkdir -p "$FOAM_USER_APPBIN" "$FOAM_USER_LIBBIN"
 
     cd "$SMARTSIM_CSC_DIR"
