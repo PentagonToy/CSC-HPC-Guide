@@ -23,7 +23,7 @@ set -Eeuo pipefail
 # USER CONFIGURATION
 # ================================================================
 readonly SMARTSIM_CSC_REPO="https://github.com/PentagonToy/SmartSim-CSC.git"
-readonly SMARTSIM_CSC_REF="v1.1.2"
+readonly SMARTSIM_CSC_REF="3b1d9cd42d4ed3b22782f2697c40d74841ce7c5d"
 
 readonly X64_GCC_MODULE="gcc/13.4.0"
 readonly X64_CMAKE_MODULE="cmake/3.26.5"
@@ -591,7 +591,7 @@ set_global_paths() {
     export OPENFOAM_THIRDPARTY_DIR="$OPENFOAM_SOURCE_ROOT/ThirdParty-v$OPENFOAM_VERSION"
     export OPENFOAM_USER_DIR="$OPENFOAM_ROOT/OpenFOAM-v$OPENFOAM_VERSION"
     export OPENFOAM_ARCHIVE_NAME="OpenFOAM-v$OPENFOAM_VERSION-roihu-x86_64-gcc15.2-openmpi5.0.10.tar.zst"
-    export OPENFOAM_BUILD_SCRIPT="$SMARTSIM_CSC_DIR/scripts/openfoam/build-openfoam-v$OPENFOAM_VERSION.sh"
+    export OPENFOAM_BUILD_SCRIPT="$SMARTSIM_CSC_DIR/scripts/openfoam/build-openfoam.sh"
     export TMP_BUILD_DIR="$BASE_SCRATCH/.tykky_runtime_smartsim_$ENV_ARCH"
 
     mkdir -p "$PYTHON_ROOT/envs" "$TMP_BUILD_DIR"
