@@ -1,36 +1,14 @@
 #!/bin/bash
-# smartsim-python.sh
-# Interactive installer for the unified Python 3.12 ML + SmartSim/SmartRedis
-# Tykky environment, native SmartRedis library, optional OpenFOAM v2412
-# integration, FoamPilot CSC, smartsim-update command, optional PySR/Julia
-# runtime setup, and Jupyter kernel registration.
+# Modular SmartSim-CSC installer for CSC Roihu.
 #
-# Intended location:
-#   /scratch/$CSC_PROJECT/$PROJECT_USER_DIR/smartsim-python.sh
-#
-# This installer targets CSC's Roihu supercomputer only.
-#
-# The target profile is selected automatically from the current Roihu node:
-#   - x86_64  -> linux-x64-cpu
-#   - aarch64 -> linux-arm64-gpu
-#
-# SmartSim and SmartRedis are installed from the unified SmartSim-CSC
-# monorepo. The exact component versions, RedisAI backends, and platform
-# assets are defined by the pinned SmartSim-CSC ref and its stack.toml.
-#
-# No post-install source patching is performed. On x86_64, the installer can
-# optionally build the bundled OpenFOAM.com v2412 integration after the
-# native SmartRedis library has been installed.
-#
-# PySR (and its Julia toolchain) is OPTIONAL and is asked about separately
-# for each architecture. Answering "no" skips it entirely: it is left out of
-# requirements.in, no Julia resolve/precompile step runs during the build,
-# no writable Julia runtime is prepared, and the loader never sets up
-# PYTHON_JULIAPKG_PROJECT / JULIA_DEPOT_PATH for that architecture.
-#
-# This script performs installation only. It skips the manual validation,
-# dependency-workflow notes, troubleshooting, and deployment examples from
-# the full guide.
+# Features:
+#   - x86_64 CPU and aarch64 GPU profile detection
+#   - compact spinner-based terminal output
+#   - per-step logs and a combined installation log
+#   - failed-step log printed automatically
+#   - safe parallel compilation based on Slurm allocation or user override
+#   - optional PySR/Julia and OpenFOAM v2412 integration
+#   - Tykky environment, native SmartRedis, loader, updater, and Jupyter kernel
 
 # shellcheck shell=bash
 
@@ -42,15 +20,7 @@ fi
 set -Eeuo pipefail
 
 # ================================================================
-# FIXED INSTALLATION TARGETS
-#   Python:       3.12
-#   OpenFOAM.com: v2412
-#
-# These values are part of the supported SmartSim-CSC stack and must not be
-# changed independently.
-#
 # USER CONFIGURATION
-# Modify only this section when the SmartSim-CSC ref or CSC modules change.
 # ================================================================
 readonly SMARTSIM_CSC_REPO="https://github.com/PentagonToy/SmartSim-CSC.git"
 readonly SMARTSIM_CSC_REF="b06af85c8d8d99caeb1c3f93beca83b28ddfe8c6"
@@ -67,29 +37,33 @@ readonly OPENFOAM_MPI_MODULE="openmpi/5.0.10"
 readonly OPENFOAM_MODULE="openfoam/2412"
 
 # ================================================================
-# INTERNAL SETTINGS
-# Do not normally edit below this line.
+# GLOBAL STATE
 # ================================================================
+readonly TOTAL_STEPS=11
 CURRENT_STEP="initialisation"
+CURRENT_STEP_NUMBER=0
+CURRENT_STEP_LOG=""
 LOG_FILE=""
+STATUS_PID=""
 
-handle_error() {
-    local exit_code=$?
-
-    printf '\nInstallation failed.\n' >&2
-    printf 'Step:    %s\n' "$CURRENT_STEP" >&2
-    printf 'Command: %s\n' "$BASH_COMMAND" >&2
-    printf 'Log:     %s\n' "${LOG_FILE:-not initialised}" >&2
-    exit "$exit_code"
+cleanup_status() {
+    if [ -n "${STATUS_PID:-}" ]; then
+        kill "$STATUS_PID" 2>/dev/null || true
+        wait "$STATUS_PID" 2>/dev/null || true
+        STATUS_PID=""
+    fi
 }
-trap handle_error ERR
+
+cleanup() {
+    cleanup_status
+}
+
+trap cleanup EXIT INT TERM
 
 run_self_check() {
     local failed=0
 
-    if command -v bash >/dev/null 2>&1; then
-        bash -n "$0" || failed=1
-    fi
+    bash -n "$0" || failed=1
 
     if command -v shellcheck >/dev/null 2>&1; then
         shellcheck "$0" || failed=1
@@ -111,31 +85,235 @@ if [ "${1:-}" = "--check" ]; then
     exit
 fi
 
+# ================================================================
+# TERMINAL UI AND LOGGING
+# ================================================================
+if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ] && [ -z "${NO_COLOR:-}" ]; then
+    readonly COLOR_GREEN=$'\033[1;32m'
+    readonly COLOR_BLUE=$'\033[1;34m'
+    readonly COLOR_RED=$'\033[1;31m'
+    readonly COLOR_DIM=$'\033[2m'
+    readonly COLOR_RESET=$'\033[0m'
+    readonly CLEAR_LINE=$'\033[K'
+else
+    readonly COLOR_GREEN=""
+    readonly COLOR_BLUE=""
+    readonly COLOR_RED=""
+    readonly COLOR_DIM=""
+    readonly COLOR_RESET=""
+    readonly CLEAR_LINE=""
+fi
+
+print_section() {
+    local title="$1"
+
+    printf '\n%s\n' '=================================================================='
+    printf ' %s\n' "$title"
+    printf '%s\n\n' '=================================================================='
+}
+
 start_logging() {
     local log_dir
 
     log_dir="$PYTHON_ROOT/logs"
-    LOG_FILE="$log_dir/install-$(date '+%Y%m%d-%H%M%S')-$ENV_ARCH.log"
-
     mkdir -p "$log_dir"
-    exec > >(tee -a "$LOG_FILE") 2>&1
 
-    echo "Installation log: $LOG_FILE"
-    echo
+    LOG_FILE="$log_dir/install-$(date '+%Y%m%d-%H%M%S')-$ENV_ARCH.log"
+    : > "$LOG_FILE"
+
+    printf 'Installation log: %s\n' "$LOG_FILE"
 }
 
-echo "=================================================================="
-echo " Unified ML + SmartSim Environment Installer (Roihu only)"
-echo "=================================================================="
-echo
-echo "WARNING: This script runs the Tykky build and native SmartRedis"
-echo "compilation on the current node. Use the Roihu node architecture"
-echo "for which the environment is intended."
-echo
+print_step_prefix() {
+    local step_number="$1"
 
-# ------------------------------------------------------------------
-# Project number: double verification
-# ------------------------------------------------------------------
+    printf '%s[Step %d/%d]%s' \
+        "$COLOR_GREEN" \
+        "$step_number" \
+        "$TOTAL_STEPS" \
+        "$COLOR_RESET"
+}
+
+get_terminal_columns() {
+    local columns="${COLUMNS:-}"
+
+    if ! [[ "$columns" =~ ^[1-9][0-9]*$ ]]; then
+        columns="$(tput cols 2>/dev/null || printf '80')"
+    fi
+
+    if ! [[ "$columns" =~ ^[1-9][0-9]*$ ]]; then
+        columns=80
+    fi
+
+    printf '%s' "$columns"
+}
+
+truncate_text() {
+    local text="$1"
+    local maximum_length="$2"
+
+    if [ "$maximum_length" -le 0 ]; then
+        return
+    fi
+
+    if [ "${#text}" -le "$maximum_length" ]; then
+        printf '%s' "$text"
+    elif [ "$maximum_length" -eq 1 ]; then
+        printf '…'
+    else
+        printf '%s…' "${text:0:maximum_length-1}"
+    fi
+}
+
+start_step_status() {
+    local step_number="$1"
+    local description="$2"
+    local step_log="$3"
+
+    local frames=(
+        '⠋' '⠙' '⠹' '⠸' '⠼'
+        '⠴' '⠦' '⠧' '⠇' '⠏'
+    )
+
+    # Retain the argument for a consistent run_step interface.
+    : "$step_log"
+
+    if [ ! -t 1 ]; then
+        print_step_prefix "$step_number"
+        printf ' %s ...\n' "$description"
+        return
+    fi
+
+    # Print the full status line only once. The background renderer updates
+    # only the first spinner character, so terminal resizing cannot duplicate
+    # the complete step description.
+    printf '%s%s%s ' "$COLOR_BLUE" "${frames[0]}" "$COLOR_RESET"
+    print_step_prefix "$step_number"
+    printf ' %s' "$description"
+
+    (
+        local frame_index=0
+        local frame
+
+        while true; do
+            frame="${frames[frame_index % ${#frames[@]}]}"
+            printf '\r%s%s%s' \
+                "$COLOR_BLUE" \
+                "$frame" \
+                "$COLOR_RESET"
+
+            frame_index=$((frame_index + 1))
+            sleep 0.10
+        done
+    ) &
+
+    STATUS_PID=$!
+}
+
+finish_step_success() {
+    local step_number="$1"
+    local description="$2"
+
+    cleanup_status
+
+    if [ -t 1 ]; then
+        # Replace only the spinner character and keep the original line.
+        printf '\r%s✓%s\n' \
+            "$COLOR_GREEN" \
+            "$COLOR_RESET"
+    else
+        print_step_prefix "$step_number"
+        printf ' %s %s✓%s\n' \
+            "$description" \
+            "$COLOR_GREEN" \
+            "$COLOR_RESET"
+    fi
+}
+
+finish_step_failure() {
+    local step_number="$1"
+    local description="$2"
+    local exit_code="$3"
+    local step_log="$4"
+
+    cleanup_status
+
+    if [ -t 1 ]; then
+        # Replace only the spinner character and keep the original line.
+        printf '\r%s✗%s\n' \
+            "$COLOR_RED" \
+            "$COLOR_RESET"
+    else
+        print_step_prefix "$step_number"
+        printf ' %s %sFAILED%s\n' \
+            "$description" \
+            "$COLOR_RED" \
+            "$COLOR_RESET"
+    fi
+
+    printf '%s\n' '------------------------------------------------------------------'
+    printf '%sStep %d/%d failed with exit code %d%s\n' \
+        "$COLOR_RED" \
+        "$step_number" \
+        "$TOTAL_STEPS" \
+        "$exit_code" \
+        "$COLOR_RESET"
+    printf 'Description: %s\n' "$description"
+    printf 'Step log:    %s\n' "$step_log"
+    printf '%s\n' '------------------------------------------------------------------'
+    cat "$step_log"
+    printf '%s\n' '------------------------------------------------------------------'
+    printf 'Full installation log: %s\n' "$LOG_FILE"
+}
+
+run_step() {
+    local step_number="$1"
+    local description="$2"
+    shift 2
+
+    local exit_code
+    local step_log
+
+    CURRENT_STEP_NUMBER="$step_number"
+    CURRENT_STEP="$description"
+    step_log="$PYTHON_ROOT/logs/step-$(printf '%02d' "$step_number")-$ENV_ARCH.log"
+    CURRENT_STEP_LOG="$step_log"
+
+    : > "$step_log"
+    {
+        printf '[%s]\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+        printf 'Step %d/%d: %s\n' "$step_number" "$TOTAL_STEPS" "$description"
+        printf 'Build jobs: %s\n\n' "$BUILD_JOBS"
+    } >> "$step_log"
+
+    start_step_status "$step_number" "$description" "$step_log"
+
+    set +e
+    "$@" >> "$step_log" 2>&1
+    exit_code=$?
+    set -e
+
+    {
+        printf '\n===== Step %d/%d: %s =====\n' \
+            "$step_number" "$TOTAL_STEPS" "$description"
+        cat "$step_log"
+    } >> "$LOG_FILE"
+
+    if [ "$exit_code" -ne 0 ]; then
+        finish_step_failure \
+            "$step_number" \
+            "$description" \
+            "$exit_code" \
+            "$step_log"
+        exit "$exit_code"
+    fi
+
+    finish_step_success "$step_number" "$description"
+}
+
+# ================================================================
+# PROMPTS AND DETECTION
+# ================================================================
 prompt_project_number() {
     local first second
 
@@ -160,9 +338,6 @@ prompt_project_number() {
     done
 }
 
-# ------------------------------------------------------------------
-# Single-entry prompt
-# ------------------------------------------------------------------
 prompt_value() {
     local prompt_text="$1"
     local result_variable="$2"
@@ -182,9 +357,38 @@ prompt_value() {
     done
 }
 
-# ------------------------------------------------------------------
-# Architecture and SmartSim-CSC profile detection
-# ------------------------------------------------------------------
+prompt_yes_no() {
+    local prompt_text="$1"
+    local default_value="$2"
+    local result_variable="$3"
+    local value
+
+    while true; do
+        read -r -p "$prompt_text" value
+        value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]' | xargs)"
+
+        if [ -z "$value" ]; then
+            printf -v "$result_variable" '%s' "$default_value"
+            return
+        fi
+
+        case "$value" in
+            y|yes)
+                printf -v "$result_variable" '%s' "yes"
+                return
+                ;;
+            n|no)
+                printf -v "$result_variable" '%s' "no"
+                return
+                ;;
+            *)
+                echo "Invalid choice. Enter y or n."
+                echo
+                ;;
+        esac
+    done
+}
+
 detect_architecture() {
     case "$(uname -m)" in
         x86_64)
@@ -215,200 +419,163 @@ detect_architecture() {
     export GCC_MODULE CMAKE_MODULE CUDA_MODULE JAX_PLATFORMS
 }
 
-# ------------------------------------------------------------------
-# PySR / Julia toggle prompt
-# ------------------------------------------------------------------
-prompt_install_pysr() {
-    local value
+detect_default_build_jobs() {
+    local allocated_cpus=0
 
-    while true; do
-        read -r -p "Install PySR (symbolic regression) with its Julia toolchain? [Y/n]: " value
-        value="$(echo "$value" | tr '[:upper:]' '[:lower:]' | xargs)"
-
-        case "$value" in
-            ""|y|yes)
-                INSTALL_PYSR="yes"
-                return
-                ;;
-            n|no)
-                INSTALL_PYSR="no"
-                return
-                ;;
-            *)
-                echo "Invalid choice. Enter y or n."
-                echo
-                ;;
-        esac
-    done
-}
-
-# ------------------------------------------------------------------
-# OpenFOAM v2412 toggle prompt (x86_64 only)
-# ------------------------------------------------------------------
-prompt_build_openfoam() {
-    local value
-
-    if [ "$ENV_ARCH" != "x64" ]; then
-        BUILD_OPENFOAM="no"
-        return
+    if [ -n "${SLURM_JOB_ID:-}" ]; then
+        if [[ "${SLURM_CPUS_PER_TASK:-}" =~ ^[1-9][0-9]*$ ]]; then
+            allocated_cpus="$SLURM_CPUS_PER_TASK"
+        elif [[ "${SLURM_CPUS_ON_NODE:-}" =~ ^[1-9][0-9]*$ ]]; then
+            allocated_cpus="$SLURM_CPUS_ON_NODE"
+        fi
     fi
 
-    while true; do
-        read -r -p "Build the bundled OpenFOAM v2412 integration? [Y/n]: " value
-        value="$(echo "$value" | tr '[:upper:]' '[:lower:]' | xargs)"
-
-        case "$value" in
-            ""|y|yes)
-                BUILD_OPENFOAM="yes"
-                return
-                ;;
-            n|no)
-                BUILD_OPENFOAM="no"
-                return
-                ;;
-            *)
-                echo "Invalid choice. Enter y or n."
-                echo
-                ;;
-        esac
-    done
+    if [ "$allocated_cpus" -gt 0 ]; then
+        DEFAULT_BUILD_JOBS=$((allocated_cpus - 2))
+        if [ "$DEFAULT_BUILD_JOBS" -lt 1 ]; then
+            DEFAULT_BUILD_JOBS=1
+        fi
+        BUILD_JOB_SOURCE="Slurm allocation: ${allocated_cpus} CPUs, reserving 2"
+    else
+        DEFAULT_BUILD_JOBS=1
+        BUILD_JOB_SOURCE="No Slurm allocation detected: login-node safe mode"
+    fi
 }
 
-# ------------------------------------------------------------------
-# 1. Collect configuration
-# ------------------------------------------------------------------
-echo "--- Project identity ---"
-prompt_project_number
+prompt_build_jobs() {
+    local value
 
-if [[ "$RAW_PROJECT" == project_* ]]; then
-    CSC_PROJECT="$RAW_PROJECT"
-else
-    CSC_PROJECT="project_${RAW_PROJECT}"
-fi
+    detect_default_build_jobs
+    printf 'CPU policy: %s\n' "$BUILD_JOB_SOURCE"
+    printf 'Press Enter to use %s build jobs, or type another positive integer.\n' \
+        "$DEFAULT_BUILD_JOBS"
 
-prompt_value "Type project user directory name" PROJECT_USER_DIR
-prompt_value "Type environment nickname" ENV_NICKNAME
+    while true; do
+        read -r -p "Parallel build jobs [$DEFAULT_BUILD_JOBS]: " value
+        value="${value:-$DEFAULT_BUILD_JOBS}"
 
-echo
-echo "--- Target architecture ---"
-detect_architecture
-echo "Detected $(uname -m): ENV_ARCH=$ENV_ARCH, PROFILE=$SMARTSIM_CSC_PROFILE"
+        if [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
+            BUILD_JOBS="$value"
+            break
+        fi
 
-echo
-echo "--- Optional PySR / Julia toolchain ---"
-prompt_install_pysr
+        echo "Build jobs must be a positive integer."
+    done
 
-echo
-echo "--- Optional OpenFOAM integration ---"
-prompt_build_openfoam
+    JULIA_BUILD_THREADS="$BUILD_JOBS"
+    if [ "$JULIA_BUILD_THREADS" -gt 8 ]; then
+        JULIA_BUILD_THREADS=8
+    fi
 
-echo
-echo "--- Configuration ---"
-echo "CSC_PROJECT       = $CSC_PROJECT"
-echo "PROJECT_USER_DIR  = $PROJECT_USER_DIR"
-echo "ENV_NICKNAME      = $ENV_NICKNAME"
-echo "ENV_ARCH          = $ENV_ARCH"
-echo "GCC_MODULE        = $GCC_MODULE"
-echo "CMAKE_MODULE      = $CMAKE_MODULE"
-echo "CUDA_MODULE       = ${CUDA_MODULE:-none}"
-echo "Python            = 3.12"
-echo "SmartSim-CSC repo = $SMARTSIM_CSC_REPO"
-echo "SmartSim-CSC ref  = $SMARTSIM_CSC_REF"
-echo "SmartSim profile  = $SMARTSIM_CSC_PROFILE"
-if [ "$BUILD_OPENFOAM" = "yes" ]; then
-    echo "OpenFOAM v2412    = BUILD on x86_64"
-else
-    echo "OpenFOAM v2412    = SKIPPED"
-fi
-if [ "$INSTALL_PYSR" = "yes" ]; then
-    echo "PySR / Julia      = resolved and precompiled during build"
-else
-    echo "PySR / Julia      = SKIPPED (INSTALL_PYSR=no)"
-fi
-echo
+    export BUILD_JOBS JULIA_BUILD_THREADS
+    export MAKEFLAGS="-j$BUILD_JOBS"
+    export CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS"
+    export WM_NCOMPPROCS="$BUILD_JOBS"
+    export JULIA_NUM_THREADS="$JULIA_BUILD_THREADS"
+}
 
-read -r -p "Proceed with this configuration? [y/N]: " CONFIRM_ALL
-case "$CONFIRM_ALL" in
-    y|Y|yes|YES) ;;
-    *) echo "Aborted."; exit 1 ;;
-esac
-echo
+collect_configuration() {
+    echo "=================================================================="
+    echo " Unified ML + SmartSim Environment Installer (Roihu only)"
+    echo "=================================================================="
+    echo
 
-# ------------------------------------------------------------------
-# 2. Identity file
-# ------------------------------------------------------------------
-CURRENT_STEP="Writing identity file"
-echo "[1/11] $CURRENT_STEP..."
+    echo "--- Project identity ---"
+    prompt_project_number
 
-mkdir -p "$HOME/.config/csc-hpc"
+    if [[ "$RAW_PROJECT" == project_* ]]; then
+        CSC_PROJECT="$RAW_PROJECT"
+    else
+        CSC_PROJECT="project_${RAW_PROJECT}"
+    fi
 
-cat <<EOF > "$HOME/.config/csc-hpc/identity.sh"
+    prompt_value "Type project user directory name" PROJECT_USER_DIR
+    prompt_value "Type environment nickname" ENV_NICKNAME
+
+    echo
+    echo "--- Target architecture ---"
+    detect_architecture
+    echo "Detected $(uname -m): ENV_ARCH=$ENV_ARCH, PROFILE=$SMARTSIM_CSC_PROFILE"
+
+    echo
+    echo "--- Optional components ---"
+    prompt_yes_no \
+        "Install PySR with its Julia toolchain? [Y/n]: " \
+        "yes" INSTALL_PYSR
+
+    if [ "$ENV_ARCH" = "x64" ]; then
+        prompt_yes_no \
+            "Build the bundled OpenFOAM v2412 integration? [Y/n]: " \
+            "yes" BUILD_OPENFOAM
+    else
+        BUILD_OPENFOAM="no"
+    fi
+
+    echo
+    echo "--- Parallel build ---"
+    prompt_build_jobs
+
+    print_section "Setup Configuration"
+
+    printf '%-24s %s\n' \
+        "CSC project" "$CSC_PROJECT" \
+        "Project user directory" "$PROJECT_USER_DIR" \
+        "Environment nickname" "$ENV_NICKNAME" \
+        "Architecture" "$ENV_ARCH" \
+        "SmartSim profile" "$SMARTSIM_CSC_PROFILE" \
+        "PySR / Julia" "$INSTALL_PYSR" \
+        "OpenFOAM v2412" "$BUILD_OPENFOAM" \
+        "Parallel build jobs" "$BUILD_JOBS" \
+        "Julia build threads" "$JULIA_BUILD_THREADS" \
+        "SmartSim-CSC ref" "$SMARTSIM_CSC_REF"
+    echo
+
+    read -r -p "Proceed with this configuration? [y/N]: " CONFIRM_ALL
+    case "$CONFIRM_ALL" in
+        y|Y|yes|YES) ;;
+        *) echo "Aborted."; exit 1 ;;
+    esac
+}
+
+set_global_paths() {
+    export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
+    export PYTHON_BASE="$BASE_SCRATCH/Python"
+    export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
+    export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
+    export SMARTSIM_CSC_REPO SMARTSIM_CSC_REF
+    export SMARTSIM_CSC_DIR="$PYTHON_ROOT/src/SmartSim-CSC"
+    export SMARTSIM_CSC_PROFILE
+    export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
+    export OPENFOAM_USER_DIR="$BASE_SCRATCH/OpenFOAM/OpenFOAM-v2412"
+    export TMP_BUILD_DIR="$BASE_SCRATCH/.tykky_runtime_smartsim_$ENV_ARCH"
+
+    mkdir -p "$PYTHON_ROOT/envs" "$TMP_BUILD_DIR"
+}
+
+# ================================================================
+# INSTALLATION STEPS
+# ================================================================
+step_write_identity() {
+    mkdir -p "$HOME/.config/csc-hpc"
+
+    cat <<EOF_IDENTITY > "$HOME/.config/csc-hpc/identity.sh"
 export CSC_PROJECT="$CSC_PROJECT"
 export PROJECT_USER_DIR="$PROJECT_USER_DIR"
 export ENV_NICKNAME="$ENV_NICKNAME"
-EOF
+EOF_IDENTITY
 
-chmod 600 "$HOME/.config/csc-hpc/identity.sh"
+    chmod 600 "$HOME/.config/csc-hpc/identity.sh"
 
-echo "      $HOME/.config/csc-hpc/identity.sh"
-echo
-
-# ------------------------------------------------------------------
-# 3. Global paths
-# ------------------------------------------------------------------
-CURRENT_STEP="Setting paths"
-echo "[2/11] $CURRENT_STEP..."
-
-source "$HOME/.config/csc-hpc/identity.sh"
-
-export ENV_ARCH
-export INSTALL_PYSR
-export BUILD_OPENFOAM
-export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
-export PYTHON_BASE="$BASE_SCRATCH/Python"
-export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
-export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
-export SMARTSIM_CSC_REPO SMARTSIM_CSC_REF
-export SMARTSIM_CSC_DIR="$PYTHON_ROOT/SmartSim-CSC"
-export SMARTSIM_CSC_PROFILE
-export SMARTREDIS_DIR="$PYTHON_ROOT/SmartRedis-$ENV_ARCH"
-export OPENFOAM_USER_DIR="$PYTHON_ROOT/OpenFOAM/OpenFOAM-v2412"
-export TMP_BUILD_DIR="$BASE_SCRATCH/.tykky_runtime_smartsim_$ENV_ARCH"
-
-mkdir -p "$PYTHON_ROOT/envs" "$TMP_BUILD_DIR"
-
-# Persist the PySR toggle for this architecture so later sessions
-# (updates, loader, rebuilds) can recover it without re-asking.
-cat <<EOF > "$PYTHON_ROOT/install-options-$ENV_ARCH.sh"
+    cat <<EOF_OPTIONS > "$PYTHON_ROOT/install-options-$ENV_ARCH.sh"
 export INSTALL_PYSR="$INSTALL_PYSR"
-EOF
-chmod 600 "$PYTHON_ROOT/install-options-$ENV_ARCH.sh"
+EOF_OPTIONS
+    chmod 600 "$PYTHON_ROOT/install-options-$ENV_ARCH.sh"
+}
 
-echo "      ENV_ARCH=$ENV_ARCH"
-echo "      PYTHON_ROOT=$PYTHON_ROOT"
-echo "      ENV_PREFIX=$ENV_PREFIX"
-echo "      SMARTSIM_CSC_DIR=$SMARTSIM_CSC_DIR"
-echo "      SMARTSIM_CSC_REF=$SMARTSIM_CSC_REF"
-echo "      SMARTSIM_CSC_PROFILE=$SMARTSIM_CSC_PROFILE"
-echo "      SMARTREDIS_DIR=$SMARTREDIS_DIR"
-echo "      OPENFOAM_USER_DIR=$OPENFOAM_USER_DIR"
-echo "      BUILD_OPENFOAM=$BUILD_OPENFOAM"
-echo "      TMP_BUILD_DIR=$TMP_BUILD_DIR"
-echo "      INSTALL_PYSR=$INSTALL_PYSR"
-echo "      Recorded: $PYTHON_ROOT/install-options-$ENV_ARCH.sh"
-echo
+step_create_configuration() {
+    mkdir -p "$PYTHON_ROOT"
 
-start_logging
-
-# ------------------------------------------------------------------
-# 4. Configuration files
-# ------------------------------------------------------------------
-CURRENT_STEP="Creating configuration files"
-echo "[3/11] $CURRENT_STEP..."
-
-mkdir -p "$PYTHON_ROOT"
-
-cat <<'EOF' > "$PYTHON_ROOT/base4SmartSim.yml"
+    cat <<'EOF_YAML' > "$PYTHON_ROOT/base4SmartSim.yml"
 channels:
   - conda-forge
   - nodefaults
@@ -420,9 +587,9 @@ dependencies:
   - cmake
   - make
   - ninja
-EOF
+EOF_YAML
 
-cat <<'EOF' > "$PYTHON_ROOT/requirements.in"
+    cat <<'EOF_REQUIREMENTS' > "$PYTHON_ROOT/requirements.in"
 # --- Core Math & Data ---
 numpy
 bottleneck
@@ -551,25 +718,24 @@ natsort
 pytest
 tabulate
 typing-extensions
-EOF
+EOF_REQUIREMENTS
 
-# pysr/julia are appended conditionally, based on INSTALL_PYSR, rather than
-# always being present.
-if [ "$INSTALL_PYSR" = "yes" ]; then
-    cat <<'EOF' >> "$PYTHON_ROOT/requirements.in"
+    if [ "$INSTALL_PYSR" = "yes" ]; then
+        cat <<'EOF_PYSR' >> "$PYTHON_ROOT/requirements.in"
 
 # --- Symbolic Regression & Julia ---
 pysr
 julia
-EOF
-    echo "      Added pysr/julia to requirements.in (INSTALL_PYSR=yes)."
-else
-    echo "      Skipped pysr/julia in requirements.in (INSTALL_PYSR=no)."
-fi
+EOF_PYSR
+    fi
 
-cat <<'EOF' > "$PYTHON_ROOT/extra4SmartSim.sh"
+    create_extra_install_script
+}
+
+create_extra_install_script() {
+    cat <<'EOF_EXTRA' > "$PYTHON_ROOT/extra4SmartSim.sh"
 #!/bin/bash
-set -e
+set -Eeuo pipefail
 
 : "${CW_BUILD_TMPDIR:?CW_BUILD_TMPDIR is not set}"
 : "${PYTHON_ROOT:?PYTHON_ROOT is not set}"
@@ -579,33 +745,36 @@ set -e
 : "${SMARTSIM_CSC_DIR:?SMARTSIM_CSC_DIR is not set}"
 : "${SMARTSIM_CSC_PROFILE:?SMARTSIM_CSC_PROFILE is not set}"
 : "${INSTALL_PYSR:=yes}"
+: "${BUILD_JOBS:=1}"
+: "${JULIA_BUILD_THREADS:=1}"
 
 export TMPDIR="$CW_BUILD_TMPDIR"
 export PIP_CACHE_DIR="$CW_BUILD_TMPDIR/.pip_cache"
 export UV_CACHE_DIR="$CW_BUILD_TMPDIR/.uv_cache"
 export UV_LINK_MODE=copy
-export UV_CONCURRENT_DOWNLOADS=4
+export UV_CONCURRENT_DOWNLOADS=8
+export UV_NO_PROGRESS=1
+export PIP_PROGRESS_BAR=off
+export NO_COLOR=1
+export CLICOLOR=0
+export MAKEFLAGS="-j$BUILD_JOBS"
+export CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS"
+export JULIA_NUM_THREADS="$JULIA_BUILD_THREADS"
 
 mkdir -p "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
 
-python -m pip install --no-cache-dir uv
+python -m pip install --progress-bar off --no-cache-dir uv
 
 uv pip install \
     --link-mode=copy \
     --requirements "$PYTHON_ROOT/requirements.in"
 
-# Install FoamPilot from the same pinned SmartSim-CSC ref. The Tykky
-# post-install environment cannot access the host-side source checkout.
 uv pip install \
     --link-mode=copy \
     --no-deps \
     "git+${SMARTSIM_CSC_REPO}@${SMARTSIM_CSC_REF}#subdirectory=components/openfoam-smartsim/python"
 
 if [ "$INSTALL_PYSR" = "yes" ]; then
-    echo "INSTALL_PYSR=yes - resolving and precompiling PySR's Julia dependency..."
-
-    # Resolve and precompile PySR's Julia dependency using the actual
-    # in-container Python prefix.
     PYTHON_PREFIX="$(python -c 'import sys; print(sys.prefix)')"
     export JULIA_DEPOT_PATH="$PYTHON_PREFIX/julia_depot"
     export PYTHON_JULIAPKG_PROJECT="$PYTHON_PREFIX/julia_env"
@@ -616,15 +785,8 @@ if [ "$INSTALL_PYSR" = "yes" ]; then
 import juliapkg
 
 juliapkg.resolve()
-
 print(f"Julia executable: {juliapkg.executable()}")
 print(f"Julia project:    {juliapkg.project()}")
-PY
-
-    python - <<'PY'
-import pysr
-
-print(f"PySR version: {pysr.__version__}")
 PY
 
     python - <<'PY'
@@ -650,11 +812,13 @@ subprocess.run(
     check=True,
 )
 PY
-else
-    echo "INSTALL_PYSR=no - skipping PySR/Julia resolve and precompile."
+
+    python - <<'PY'
+import pysr
+print(f"PySR version: {pysr.__version__}")
+PY
 fi
 
-# Install the unified SmartSim-CSC stack.
 mkdir -p "$(dirname "$SMARTSIM_CSC_DIR")"
 
 if [ -d "$SMARTSIM_CSC_DIR/.git" ]; then
@@ -674,9 +838,11 @@ PYTHON="$(command -v python)" \
 SMART="$(dirname "$(command -v python)")/smart" \
 PROFILE="$SMARTSIM_CSC_PROFILE" \
 PYTHONNOUSERSITE=1 \
+BUILD_JOBS="$BUILD_JOBS" \
+MAKEFLAGS="-j$BUILD_JOBS" \
+CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS" \
     "$SMARTSIM_CSC_DIR/scripts/install.sh"
 
-# Restore the user-managed ML environment after SmartSim-CSC installation.
 uv pip install \
     --link-mode=copy \
     --requirements "$PYTHON_ROOT/requirements.in"
@@ -684,8 +850,7 @@ uv pip install \
 uv pip check
 
 python -m pip list --format=freeze \
-    | grep -v '^smartredis==' \
-    | grep -v '^smartsim==' \
+    | grep -viE '^(smartredis|smartsim)==' \
     | sort \
     > "$PYTHON_ROOT/requirements-$ENV_ARCH.txt"
 
@@ -716,57 +881,45 @@ else
 fi
 
 rm -rf "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
-EOF
+EOF_EXTRA
 
-chmod +x "$PYTHON_ROOT/extra4SmartSim.sh"
+    chmod +x "$PYTHON_ROOT/extra4SmartSim.sh"
+}
 
-echo "      Created base4SmartSim.yml"
-echo "      Created requirements.in"
-echo "      Created extra4SmartSim.sh"
-echo
+step_build_tykky() {
+    module purge
+    module load tykky
+    module load "$GCC_MODULE"
 
-# ------------------------------------------------------------------
-# 5. Build Tykky environment
-# ------------------------------------------------------------------
-CURRENT_STEP="Building the Tykky environment"
-echo "[4/11] $CURRENT_STEP..."
+    if [ -n "$CUDA_MODULE" ]; then
+        module load "$CUDA_MODULE"
+    fi
 
-module purge
-module load tykky
-module load "$GCC_MODULE"
-echo "      Loaded $GCC_MODULE"
+    export TMPDIR="$TMP_BUILD_DIR"
+    export CW_BUILD_TMPDIR="$TMP_BUILD_DIR"
+    export INSTALL_PYSR BUILD_JOBS JULIA_BUILD_THREADS
+    export SMARTSIM_CSC_REPO SMARTSIM_CSC_REF SMARTSIM_CSC_DIR SMARTSIM_CSC_PROFILE
 
-if [ -n "$CUDA_MODULE" ]; then
-    module load "$CUDA_MODULE"
-    echo "      Loaded $CUDA_MODULE"
-fi
+    rm -rf "$ENV_PREFIX" "$TMP_BUILD_DIR"
+    mkdir -p "$TMP_BUILD_DIR"
 
-export TMPDIR="$TMP_BUILD_DIR"
-export CW_BUILD_TMPDIR="$TMP_BUILD_DIR"
-export INSTALL_PYSR
-export SMARTSIM_CSC_REPO SMARTSIM_CSC_REF SMARTSIM_CSC_DIR SMARTSIM_CSC_PROFILE
+    conda-containerize new \
+        --prefix "$ENV_PREFIX" \
+        --post-install "$PYTHON_ROOT/extra4SmartSim.sh" \
+        "$PYTHON_ROOT/base4SmartSim.yml" \
+        2> >(grep -v '^Unrecognised xattr prefix lustre\.lov$' >&2)
 
-rm -rf "$ENV_PREFIX" "$TMP_BUILD_DIR"
-mkdir -p "$TMP_BUILD_DIR"
+    test -x "$ENV_PREFIX/bin/python"
+    test -f "$PYTHON_ROOT/requirements-$ENV_ARCH.txt"
+}
 
-conda-containerize new \
-    --prefix "$ENV_PREFIX" \
-    --post-install "$PYTHON_ROOT/extra4SmartSim.sh" \
-    "$PYTHON_ROOT/base4SmartSim.yml" \
-    2> >(grep -v '^Unrecognised xattr prefix lustre\.lov$' >&2)
-
-echo
-echo "      Tykky environment built (INSTALL_PYSR=$INSTALL_PYSR):"
-ls -ld "$ENV_PREFIX"
-ls -lh "$PYTHON_ROOT/requirements-$ENV_ARCH.txt"
-ls -lh "$PYTHON_ROOT/julia-environment-$ENV_ARCH.txt"
-echo
-
-# ------------------------------------------------------------------
-# 5b. Prepare writable PySR / Julia runtime once (only if INSTALL_PYSR=yes)
-# ------------------------------------------------------------------
-if [ "$INSTALL_PYSR" = "yes" ]; then
-    echo "      Preparing writable PySR / Julia runtime..."
+step_prepare_julia_runtime() {
+    if [ "$INSTALL_PYSR" != "yes" ]; then
+        rm -rf \
+            "$BASE_SCRATCH/.julia_env_runtime_$ENV_ARCH" \
+            "$BASE_SCRATCH/.julia_depot_runtime_$ENV_ARCH"
+        return
+    fi
 
     JULIA_ENV_RUNTIME="$BASE_SCRATCH/.julia_env_runtime_$ENV_ARCH"
     JULIA_DEPOT_RUNTIME="$BASE_SCRATCH/.julia_depot_runtime_$ENV_ARCH"
@@ -784,42 +937,21 @@ source = Path(sys.prefix) / "julia_env"
 target = Path(os.environ["JULIA_ENV_RUNTIME"])
 
 if not source.is_dir():
-    raise SystemExit(
-        "Packaged Julia environment was not found inside the Tykky image:\n"
-        f"    {source}"
-    )
+    raise SystemExit(f"Packaged Julia environment not found: {source}")
 
 shutil.copytree(source, target)
-print(f"      Copied Julia environment: {source} -> {target}")
+print(f"Copied Julia environment: {source} -> {target}")
 PY
 
     mkdir -p "$JULIA_DEPOT_RUNTIME"
+}
 
-    echo "      Julia environment: $JULIA_ENV_RUNTIME"
-    echo "      Julia depot:       $JULIA_DEPOT_RUNTIME"
-else
-    echo "      INSTALL_PYSR=no - skipping writable Julia runtime preparation."
-    rm -rf "$BASE_SCRATCH/.julia_env_runtime_$ENV_ARCH" "$BASE_SCRATCH/.julia_depot_runtime_$ENV_ARCH"
-fi
-echo
+step_build_native_smartredis() {
+    module purge
+    module load "$GCC_MODULE"
+    module load "$CMAKE_MODULE"
 
-# ------------------------------------------------------------------
-# 6. Native SmartRedis library
-# ------------------------------------------------------------------
-CURRENT_STEP="Loading native-build modules"
-echo "[5/11] $CURRENT_STEP..."
-
-module purge
-module load "$GCC_MODULE"
-module load "$CMAKE_MODULE"
-
-echo "      Loaded $GCC_MODULE"
-echo "      Loaded $CMAKE_MODULE"
-echo
-
-# Record runtime modules and the PySR-enabled flag for the loader so it
-# never has to guess.
-cat <<EOF > "$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
+    cat <<EOF_RUNTIME > "$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
 export SMARTSIM_GCC_MODULE="$GCC_MODULE"
 export SMARTSIM_CMAKE_MODULE="$CMAKE_MODULE"
 export SMARTSIM_CUDA_MODULE="$CUDA_MODULE"
@@ -828,73 +960,61 @@ export SMARTSIM_OPENFOAM_MPI_MODULE="$OPENFOAM_MPI_MODULE"
 export SMARTSIM_OPENFOAM_MODULE="$OPENFOAM_MODULE"
 export SMARTSIM_PYSR_ENABLED="$INSTALL_PYSR"
 export SMARTSIM_OPENFOAM_ENABLED="$BUILD_OPENFOAM"
-EOF
-chmod 600 "$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
+export SMARTSIM_BUILD_JOBS="$BUILD_JOBS"
+EOF_RUNTIME
+    chmod 600 "$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
 
-CURRENT_STEP="Building the native SmartRedis library"
-echo "[6/11] $CURRENT_STEP..."
+    if [ ! -d "$SMARTSIM_CSC_DIR/components/smartredis" ]; then
+        echo "SmartRedis source not found: $SMARTSIM_CSC_DIR/components/smartredis"
+        return 1
+    fi
 
-if [ ! -d "$SMARTSIM_CSC_DIR/components/smartredis" ]; then
-    echo "SmartRedis source was not found in the SmartSim-CSC checkout:"
-    echo "    $SMARTSIM_CSC_DIR/components/smartredis"
-    exit 1
-fi
+    rm -rf "$SMARTREDIS_DIR"
+    mkdir -p "$SMARTREDIS_DIR"
+    cp -a "$SMARTSIM_CSC_DIR/components/smartredis/." "$SMARTREDIS_DIR/"
 
-rm -rf "$SMARTREDIS_DIR"
-mkdir -p "$SMARTREDIS_DIR"
-cp -a "$SMARTSIM_CSC_DIR/components/smartredis/." "$SMARTREDIS_DIR/"
+    cd "$SMARTREDIS_DIR"
+    rm -rf build install
 
-cd "$SMARTREDIS_DIR"
-rm -rf build install
+    env \
+        -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS \
+        -u CC -u CXX -u FC \
+        CC=gcc CXX=g++ FC=gfortran \
+        MAKEFLAGS="-j$BUILD_JOBS" \
+        CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS" \
+        make -j "$BUILD_JOBS" lib-with-fortran
+}
 
-env \
-    -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS \
-    -u CC -u CXX -u FC \
-    CC=gcc CXX=g++ FC=gfortran \
-    make lib-with-fortran
+step_verify_native_smartredis() {
+    local lib_dir
 
-echo
-CURRENT_STEP="Verifying the native SmartRedis library"
-echo "[7/11] $CURRENT_STEP..."
+    if [ -d "$SMARTREDIS_DIR/install/lib64" ]; then
+        lib_dir="lib64"
+    else
+        lib_dir="lib"
+    fi
 
-find "$SMARTREDIS_DIR/install" -maxdepth 3 -type f | sort
+    test -f "$SMARTREDIS_DIR/install/$lib_dir/libsmartredis-fortran.so"
 
-if [ -d "$SMARTREDIS_DIR/install/lib64" ]; then
-    LIB_DIR="lib64"
-else
-    LIB_DIR="lib"
-fi
+    LD_LIBRARY_PATH="$SMARTREDIS_DIR/install/$lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+        ldd "$SMARTREDIS_DIR/install/$lib_dir/libsmartredis-fortran.so"
+}
 
-echo "      Native library directory: install/$LIB_DIR"
-ls -la "$SMARTREDIS_DIR/install/$LIB_DIR"
+step_build_openfoam() {
+    local smartredis_lib_dir
 
-if [ -f "$SMARTREDIS_DIR/install/$LIB_DIR/libsmartredis-fortran.so" ]; then
-    echo "      SmartRedis Fortran library installed successfully."
-else
-    echo "ERROR: libsmartredis-fortran.so was not found."
-    exit 1
-fi
-
-LD_LIBRARY_PATH="$SMARTREDIS_DIR/install/$LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-    ldd "$SMARTREDIS_DIR/install/$LIB_DIR/libsmartredis-fortran.so"
-echo
-
-# ------------------------------------------------------------------
-# 6b. Optional OpenFOAM v2412 integration (x86_64 only)
-# ------------------------------------------------------------------
-if [ "$BUILD_OPENFOAM" = "yes" ]; then
-    CURRENT_STEP="Building the OpenFOAM v2412 integration"
-echo "[8/11] $CURRENT_STEP..."
+    if [ "$BUILD_OPENFOAM" != "yes" ]; then
+        return
+    fi
 
     if [ "$ENV_ARCH" != "x64" ]; then
-        echo "ERROR: OpenFOAM integration is currently supported only on x86_64."
-        exit 1
+        echo "OpenFOAM integration is supported only on x86_64."
+        return 1
     fi
 
     if [ ! -x "$SMARTSIM_CSC_DIR/scripts/openfoam/build-openfoam-v2412.sh" ]; then
-        echo "OpenFOAM build script was not found:"
-        echo "    $SMARTSIM_CSC_DIR/scripts/openfoam/build-openfoam-v2412.sh"
-        exit 1
+        echo "OpenFOAM build script not found."
+        return 1
     fi
 
     module --force purge
@@ -902,78 +1022,50 @@ echo "[8/11] $CURRENT_STEP..."
     module load "$OPENFOAM_MPI_MODULE"
     module load "$OPENFOAM_MODULE"
 
-    # Override CSC module defaults with this user's project-scoped location.
     export FOAM_USER_DIR="$OPENFOAM_USER_DIR"
     export WM_PROJECT_USER_DIR="$OPENFOAM_USER_DIR"
     export FOAM_USER_APPBIN="$OPENFOAM_USER_DIR/platforms/$WM_OPTIONS/bin"
     export FOAM_USER_LIBBIN="$OPENFOAM_USER_DIR/platforms/$WM_OPTIONS/lib"
+    export WM_NCOMPPROCS="$BUILD_JOBS"
 
     export SMARTREDIS_INCLUDE="$SMARTREDIS_DIR/install/include"
     export SMARTREDIS_DEP_INCLUDE="$SMARTREDIS_DIR/install/include"
 
     if [ -d "$SMARTREDIS_DIR/install/lib64" ]; then
-        export SMARTREDIS_LIB="$SMARTREDIS_DIR/install/lib64"
+        smartredis_lib_dir="$SMARTREDIS_DIR/install/lib64"
     else
-        export SMARTREDIS_LIB="$SMARTREDIS_DIR/install/lib"
+        smartredis_lib_dir="$SMARTREDIS_DIR/install/lib"
     fi
+    export SMARTREDIS_LIB="$smartredis_lib_dir"
 
     rm -rf "$OPENFOAM_USER_DIR"
     mkdir -p "$FOAM_USER_APPBIN" "$FOAM_USER_LIBBIN"
 
     cd "$SMARTSIM_CSC_DIR"
-    "$SMARTSIM_CSC_DIR/scripts/openfoam/build-openfoam-v2412.sh"
+    WM_NCOMPPROCS="$BUILD_JOBS" \
+    MAKEFLAGS="-j$BUILD_JOBS" \
+        "$SMARTSIM_CSC_DIR/scripts/openfoam/build-openfoam-v2412.sh"
 
-    # Reassert project-scoped paths in the installer shell before validation.
-    export FOAM_USER_DIR="$OPENFOAM_USER_DIR"
-    export WM_PROJECT_USER_DIR="$OPENFOAM_USER_DIR"
-    export FOAM_USER_APPBIN="$OPENFOAM_USER_DIR/platforms/$WM_OPTIONS/bin"
-    export FOAM_USER_LIBBIN="$OPENFOAM_USER_DIR/platforms/$WM_OPTIONS/lib"
-
-    if [ -d "$SMARTREDIS_DIR/install/lib64" ]; then
-        SMARTREDIS_LIB_DIR="$SMARTREDIS_DIR/install/lib64"
-    else
-        SMARTREDIS_LIB_DIR="$SMARTREDIS_DIR/install/lib"
-    fi
-
-    export LD_LIBRARY_PATH="$SMARTREDIS_LIB_DIR:$FOAM_USER_LIBBIN${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-
-    echo
-    echo "      OpenFOAM integration installed:"
-    echo "      FOAM_USER_APPBIN=$FOAM_USER_APPBIN"
-    echo "      FOAM_USER_LIBBIN=$FOAM_USER_LIBBIN"
+    export LD_LIBRARY_PATH="$smartredis_lib_dir:$FOAM_USER_LIBBIN${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
     for executable in foamSmartSimSvd foamSmartSimSvdDBAPI svdToFoam; do
-        if [ ! -x "$FOAM_USER_APPBIN/$executable" ]; then
-            echo "ERROR: Missing OpenFOAM executable: $FOAM_USER_APPBIN/$executable"
-            exit 1
-        fi
+        test -x "$FOAM_USER_APPBIN/$executable"
     done
 
     if ldd "$FOAM_USER_APPBIN/foamSmartSimSvdDBAPI" | grep -q "not found"; then
-        echo "ERROR: OpenFOAM executable has unresolved shared libraries."
         ldd "$FOAM_USER_APPBIN/foamSmartSimSvdDBAPI"
-        exit 1
+        return 1
     fi
+}
 
-    echo "      OpenFOAM v2412 integration built successfully."
-else
-    echo "      BUILD_OPENFOAM=no - skipping OpenFOAM integration build."
-fi
-echo
+step_create_loader() {
+    create_loader_script
+    create_update_post_install_script
+    create_smartsim_update_command
+}
 
-# Restore the SmartSim runtime compiler modules before creating and sourcing
-# the normal Python loader.
-module --force purge
-module load "$GCC_MODULE"
-module load "$CMAKE_MODULE"
-
-# ------------------------------------------------------------------
-# 7. Loader
-# ------------------------------------------------------------------
-CURRENT_STEP="Creating loader and update tooling"
-echo "[9/11] $CURRENT_STEP..."
-
-cat <<'EOF' > "$BASE_SCRATCH/Python4SmartSim.sh"
+create_loader_script() {
+    cat <<'EOF_LOADER' > "$BASE_SCRATCH/Python4SmartSim.sh"
 #!/bin/bash
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
@@ -993,7 +1085,7 @@ source "$IDENTITY_FILE"
 export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
 export PYTHON_BASE="$BASE_SCRATCH/Python"
 export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
-export SMARTSIM_CSC_DIR="$PYTHON_ROOT/SmartSim-CSC"
+export SMARTSIM_CSC_DIR="$PYTHON_ROOT/src/SmartSim-CSC"
 
 case "$(uname -m)" in
     x86_64)
@@ -1015,10 +1107,10 @@ case "$(uname -m)" in
 esac
 
 export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
-export SMARTREDIS_DIR="$PYTHON_ROOT/SmartRedis-$ENV_ARCH"
+export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
 export SMARTREDIS_INCLUDE="$SMARTREDIS_DIR/install/include"
 export SMARTREDIS_DEP_INCLUDE="$SMARTREDIS_DIR/install/include"
-export OPENFOAM_USER_DIR="$PYTHON_ROOT/OpenFOAM/OpenFOAM-v2412"
+export OPENFOAM_USER_DIR="$BASE_SCRATCH/OpenFOAM/OpenFOAM-v2412"
 
 if [ ! -x "$ENV_PREFIX/bin/python" ]; then
     echo "Python environment not found: $ENV_PREFIX"
@@ -1129,33 +1221,39 @@ if [ "${SMARTSIM_ENV_QUIET:-0}" != "1" ]; then
 fi
 
 unset -f path_prepend
-EOF
+EOF_LOADER
 
-chmod +x "$BASE_SCRATCH/Python4SmartSim.sh"
+    chmod +x "$BASE_SCRATCH/Python4SmartSim.sh"
+}
 
-echo "      Created $BASE_SCRATCH/Python4SmartSim.sh"
-
-# ------------------------------------------------------------------
-# 8. update4SmartSim.sh
-# ------------------------------------------------------------------
-cat <<'EOF' > "$PYTHON_ROOT/update4SmartSim.sh"
+create_update_post_install_script() {
+    cat <<'EOF_UPDATE_POST' > "$PYTHON_ROOT/update4SmartSim.sh"
 #!/bin/bash
-set -e
+set -Eeuo pipefail
 
 : "${CW_BUILD_TMPDIR:?CW_BUILD_TMPDIR is not set}"
 : "${PYTHON_ROOT:?PYTHON_ROOT is not set}"
 : "${ENV_ARCH:?ENV_ARCH is not set}"
 : "${INSTALL_PYSR:=yes}"
+: "${BUILD_JOBS:=1}"
+: "${JULIA_BUILD_THREADS:=1}"
 
 export TMPDIR="$CW_BUILD_TMPDIR"
 export PIP_CACHE_DIR="$CW_BUILD_TMPDIR/.pip_cache"
 export UV_CACHE_DIR="$CW_BUILD_TMPDIR/.uv_cache"
 export UV_LINK_MODE=copy
-export UV_CONCURRENT_DOWNLOADS=4
+export UV_CONCURRENT_DOWNLOADS=8
+export UV_NO_PROGRESS=1
+export PIP_PROGRESS_BAR=off
+export NO_COLOR=1
+export CLICOLOR=0
+export MAKEFLAGS="-j$BUILD_JOBS"
+export CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS"
+export JULIA_NUM_THREADS="$JULIA_BUILD_THREADS"
 
 mkdir -p "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
 
-python -m pip install --no-cache-dir uv
+python -m pip install --progress-bar off --no-cache-dir uv
 
 uv pip install \
     --link-mode=copy \
@@ -1173,7 +1271,6 @@ if [ -s "$UPDATE_REQUEST" ]; then
 fi
 
 if [ "$INSTALL_PYSR" = "yes" ]; then
-    # Keep the packaged Julia environment ready for PySR.
     PYTHON_PREFIX="$(python -c 'import sys; print(sys.prefix)')"
     export JULIA_DEPOT_PATH="$PYTHON_PREFIX/julia_depot"
     export PYTHON_JULIAPKG_PROJECT="$PYTHON_PREFIX/julia_env"
@@ -1183,7 +1280,6 @@ import juliapkg
 import pysr
 
 juliapkg.resolve()
-
 print(f"PySR version:     {pysr.__version__}")
 print(f"Julia executable: {juliapkg.executable()}")
 PY
@@ -1205,67 +1301,45 @@ subprocess.run(
     check=True,
 )
 PY
-else
-    echo "INSTALL_PYSR=no - skipping Julia/PySR maintenance during update."
 fi
 
-# SmartSim and SmartRedis are owned by the pinned SmartSim-CSC checkout.
-# Package updates must not replace the unified core stack.
 uv pip check
 
 python -m pip list --format=freeze \
-    | grep -v '^smartredis==' \
-    | grep -v '^smartsim==' \
+    | grep -viE '^(smartredis|smartsim)==' \
     | sort \
     > "$PYTHON_ROOT/requirements-$ENV_ARCH.txt"
 
 rm -f "$UPDATE_REQUEST"
 rm -rf "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
-EOF
+EOF_UPDATE_POST
 
-chmod +x "$PYTHON_ROOT/update4SmartSim.sh"
+    chmod +x "$PYTHON_ROOT/update4SmartSim.sh"
+}
 
-echo "      Created $PYTHON_ROOT/update4SmartSim.sh"
+create_smartsim_update_command() {
+    mkdir -p "$HOME/bin"
 
-# ------------------------------------------------------------------
-# 9. smartsim-update
-# ------------------------------------------------------------------
-mkdir -p "$HOME/bin"
-
-cat <<'EOF' > "$HOME/bin/smartsim-update"
+    cat <<'EOF_UPDATE_COMMAND' > "$HOME/bin/smartsim-update"
 #!/bin/bash -l
-set -e
+set -Eeuo pipefail
 
 if [ "$#" -eq 0 ]; then
     echo "Usage: smartsim-update <package> [package ...]"
     exit 1
 fi
 
-if [ ! -f "$HOME/.config/csc-hpc/identity.sh" ]; then
-    echo "Identity file not found: $HOME/.config/csc-hpc/identity.sh"
-    exit 1
-fi
-
 source "$HOME/.config/csc-hpc/identity.sh"
 
 export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
-export PYTHON_BASE="$BASE_SCRATCH/Python"
-export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
+export PYTHON_ROOT="$BASE_SCRATCH/Python/PythonSmartSim"
 
 case "$(uname -m)" in
-    x86_64)
-        export ENV_ARCH="x64"
-        export SMARTSIM_CSC_PROFILE="linux-x64-cpu"
-        ;;
-    aarch64)
-        export ENV_ARCH="arm64"
-        export SMARTSIM_CSC_PROFILE="linux-arm64-gpu"
-        ;;
-    *)
-        echo "Unsupported architecture: $(uname -m)"
-        exit 1
-        ;;
+    x86_64) ENV_ARCH="x64" ;;
+    aarch64) ENV_ARCH="arm64" ;;
+    *) echo "Unsupported architecture: $(uname -m)"; exit 1 ;;
 esac
+export ENV_ARCH
 
 export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
 export TMP_BUILD_DIR="$BASE_SCRATCH/.tykky_runtime_smartsim_$ENV_ARCH"
@@ -1276,28 +1350,49 @@ if [ -f "$PYTHON_ROOT/install-options-$ENV_ARCH.sh" ]; then
 fi
 export INSTALL_PYSR="${INSTALL_PYSR:-yes}"
 
-if [ ! -d "$ENV_PREFIX" ]; then
-    echo "Environment not found: $ENV_PREFIX"
-    exit 1
+if [ -f "$PYTHON_ROOT/runtime-$ENV_ARCH.sh" ]; then
+    source "$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
 fi
 
-if [ ! -f "$PYTHON_ROOT/requirements.in" ]; then
-    echo "requirements.in not found: $PYTHON_ROOT/requirements.in"
-    exit 1
+if [[ "${SMARTSIM_BUILD_JOBS_OVERRIDE:-}" =~ ^[1-9][0-9]*$ ]]; then
+    BUILD_JOBS="$SMARTSIM_BUILD_JOBS_OVERRIDE"
+elif [ -n "${SLURM_JOB_ID:-}" ]; then
+    if [[ "${SLURM_CPUS_PER_TASK:-}" =~ ^[1-9][0-9]*$ ]]; then
+        ALLOCATED_CPUS="$SLURM_CPUS_PER_TASK"
+    elif [[ "${SLURM_CPUS_ON_NODE:-}" =~ ^[1-9][0-9]*$ ]]; then
+        ALLOCATED_CPUS="$SLURM_CPUS_ON_NODE"
+    else
+        ALLOCATED_CPUS=1
+    fi
+
+    BUILD_JOBS=$((ALLOCATED_CPUS - 2))
+    if [ "$BUILD_JOBS" -lt 1 ]; then
+        BUILD_JOBS=1
+    fi
+else
+    BUILD_JOBS=1
 fi
+JULIA_BUILD_THREADS="$BUILD_JOBS"
+if [ "$JULIA_BUILD_THREADS" -gt 8 ]; then
+    JULIA_BUILD_THREADS=8
+fi
+export BUILD_JOBS JULIA_BUILD_THREADS
 
 for package in "$@"; do
-    package_name="$(printf '%s\n' "$package" | sed -E 's/\[.*//; s/[<>=!~].*//')"
+    package_name="$(
+        printf '%s\n' "$package" \
+            | sed -E 's/\[.*//; s/[<>=!~].*//' \
+            | tr '[:upper:]_.' '[:lower:]--'
+    )"
 
     case "$package_name" in
         smartsim|smartredis|jax|jaxlib|jax-cuda12-plugin|jax-cuda12-pjrt)
-            echo "$package_name is managed by SmartSim-CSC and must not be updated with smartsim-update."
+            echo "$package_name is managed by SmartSim-CSC and cannot be updated here."
             exit 1
             ;;
         pysr|julia)
             if [ "$INSTALL_PYSR" != "yes" ]; then
-                echo "$package_name requires INSTALL_PYSR=yes for this architecture ($ENV_ARCH)."
-                echo "Edit $PYTHON_ROOT/install-options-$ENV_ARCH.sh and do a full rebuild instead."
+                echo "$package_name requires INSTALL_PYSR=yes."
                 exit 1
             fi
             ;;
@@ -1315,8 +1410,11 @@ requirements_file = Path(sys.argv[1])
 requested = sys.argv[2:]
 lines = requirements_file.read_text().splitlines()
 
+
 def package_name(spec):
-    return re.split(r"[\[<>=!~]", spec, maxsplit=1)[0].strip().lower()
+    name = re.split(r"[\[<>=!~]", spec, maxsplit=1)[0].strip().lower()
+    return name.replace("_", "-").replace(".", "-")
+
 
 for spec in requested:
     name = package_name(spec)
@@ -1346,7 +1444,6 @@ module load tykky
 
 export TMPDIR="$TMP_BUILD_DIR"
 export CW_BUILD_TMPDIR="$TMP_BUILD_DIR"
-
 mkdir -p "$TMP_BUILD_DIR"
 
 conda-containerize update \
@@ -1354,73 +1451,146 @@ conda-containerize update \
     "$ENV_PREFIX" \
     2> >(grep -v '^Unrecognised xattr prefix lustre\.lov$' >&2)
 
+if [ "$INSTALL_PYSR" = "yes" ]; then
+    JULIA_ENV_RUNTIME="$BASE_SCRATCH/.julia_env_runtime_$ENV_ARCH"
+    JULIA_DEPOT_RUNTIME="$BASE_SCRATCH/.julia_depot_runtime_$ENV_ARCH"
+
+    rm -rf "$JULIA_ENV_RUNTIME"
+
+    JULIA_ENV_RUNTIME="$JULIA_ENV_RUNTIME" \
+        "$ENV_PREFIX/bin/python" - <<'PY'
+import os
+import shutil
+import sys
+from pathlib import Path
+
+source = Path(sys.prefix) / "julia_env"
+target = Path(os.environ["JULIA_ENV_RUNTIME"])
+
+if not source.is_dir():
+    raise SystemExit(f"Packaged Julia environment not found: {source}")
+
+shutil.copytree(source, target)
+print(f"Updated Julia runtime: {source} -> {target}")
+PY
+
+    mkdir -p "$JULIA_DEPOT_RUNTIME"
+fi
+
 echo "Update completed."
 echo "Recorded packages: $PYTHON_ROOT/requirements-$ENV_ARCH.txt"
-EOF
+EOF_UPDATE_COMMAND
 
-chmod +x "$HOME/bin/smartsim-update"
+    chmod +x "$HOME/bin/smartsim-update"
 
-grep -qxF 'export PATH="$HOME/bin:$PATH"' "$HOME/.bashrc" || \
-    echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.bashrc"
+    grep -qxF 'export PATH="$HOME/bin:$PATH"' "$HOME/.bashrc" || \
+        echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.bashrc"
+}
 
-echo "      Created $HOME/bin/smartsim-update"
-echo
+step_register_jupyter_kernel() {
+    local launcher
+    local kernel_dir
+    local kernel_name
+    local kernel_display
 
-# ------------------------------------------------------------------
-# 10. Jupyter kernel
-# ------------------------------------------------------------------
-CURRENT_STEP="Registering the Jupyter kernel"
-echo "[10/11] $CURRENT_STEP..."
+    module --force purge
+    module load "$GCC_MODULE"
+    module load "$CMAKE_MODULE"
 
-source "$BASE_SCRATCH/Python4SmartSim.sh"
+    # shellcheck disable=SC1090
+    source "$BASE_SCRATCH/Python4SmartSim.sh"
 
-# ------------------------------------------------------------------
-# 10a. Kernel launcher wrapper
-# ------------------------------------------------------------------
-JUPYTER_KERNEL_LAUNCHER="$PYTHON_ROOT/jupyter-kernel-$ENV_ARCH.sh"
+    launcher="$PYTHON_ROOT/jupyter-kernel-$ENV_ARCH.sh"
+    kernel_name="$ENV_NICKNAME-smartsim-$KERNEL_ARCH"
+    kernel_display="Python 3.12 ($ENV_NICKNAME SmartSim $KERNEL_ARCH)"
+    kernel_dir="$HOME/.local/share/jupyter/kernels/$kernel_name"
 
-cat <<EOF > "$JUPYTER_KERNEL_LAUNCHER"
+    cat <<EOF_KERNEL_LAUNCHER > "$launcher"
 #!/bin/bash
 export SMARTSIM_ENV_QUIET=1
 source "$BASE_SCRATCH/Python4SmartSim.sh" || exit 1
 unset SMARTSIM_ENV_QUIET
 exec "$ENV_PREFIX/bin/python" -m ipykernel_launcher "\$@"
-EOF
+EOF_KERNEL_LAUNCHER
+    chmod +x "$launcher"
 
-chmod +x "$JUPYTER_KERNEL_LAUNCHER"
-
-echo "      Created $JUPYTER_KERNEL_LAUNCHER"
-
-# ------------------------------------------------------------------
-# 10b. kernel.json using the launcher
-# ------------------------------------------------------------------
-mkdir -p "$JUPYTER_KERNEL_DIR"
-
-cat <<EOF > "$JUPYTER_KERNEL_DIR/kernel.json"
+    mkdir -p "$kernel_dir"
+    cat <<EOF_KERNEL_JSON > "$kernel_dir/kernel.json"
 {
   "argv": [
-    "$JUPYTER_KERNEL_LAUNCHER",
+    "$launcher",
     "-f",
     "{connection_file}"
   ],
-  "display_name": "$JUPYTER_KERNEL_DISPLAY",
+  "display_name": "$kernel_display",
   "language": "python",
   "metadata": {
     "debugger": true
   }
 }
-EOF
+EOF_KERNEL_JSON
+}
 
-echo "      Created $JUPYTER_KERNEL_DIR/kernel.json"
-echo "      Registered $JUPYTER_KERNEL_NAME"
-echo
+step_validate_installation() {
+    local lib_dir
 
-if command -v jupyter >/dev/null 2>&1; then
-    jupyter kernelspec list 2>/dev/null || true
-fi
+    # shellcheck disable=SC1090
+    SMARTSIM_ENV_QUIET=1 source "$BASE_SCRATCH/Python4SmartSim.sh"
 
-CURRENT_STEP="Installation complete"
-echo "[11/11] $CURRENT_STEP."
-echo "Load with: source \"$BASE_SCRATCH/Python4SmartSim.sh\""
-echo "Update packages with: smartsim-update <package>"
-echo "SmartSim-CSC ref: $SMARTSIM_CSC_REF"
+    "$ENV_PREFIX/bin/python" - <<'PY'
+import importlib
+
+for module_name in ("jax", "smartsim", "smartredis", "foampilot"):
+    module = importlib.import_module(module_name)
+    version = getattr(module, "__version__", "unknown")
+    print(f"{module_name}: {version}")
+PY
+
+    if [ -d "$SMARTREDIS_DIR/install/lib64" ]; then
+        lib_dir="lib64"
+    else
+        lib_dir="lib"
+    fi
+
+    test -f "$SMARTREDIS_DIR/install/$lib_dir/libsmartredis.so"
+    test -f "$SMARTREDIS_DIR/install/$lib_dir/libsmartredis-fortran.so"
+
+    if [ "$INSTALL_PYSR" = "yes" ]; then
+        "$ENV_PREFIX/bin/python" - <<'PY'
+import pysr
+print(f"PySR: {pysr.__version__}")
+PY
+    fi
+}
+
+step_finish() {
+    printf 'Load with: source "%s"\n' "$BASE_SCRATCH/Python4SmartSim.sh"
+    printf 'Update packages with: smartsim-update <package>\n'
+    printf 'SmartSim-CSC ref: %s\n' "$SMARTSIM_CSC_REF"
+    printf 'Parallel build jobs: %s\n' "$BUILD_JOBS"
+}
+
+main() {
+    collect_configuration
+    set_global_paths
+    start_logging
+    print_section "Installation Progress"
+
+    run_step 1 "Writing identity and install options" step_write_identity
+    run_step 2 "Creating configuration and build scripts" step_create_configuration
+    run_step 3 "Building the Tykky Python environment" step_build_tykky
+    run_step 4 "Preparing the writable Julia runtime" step_prepare_julia_runtime
+    run_step 5 "Building native SmartRedis" step_build_native_smartredis
+    run_step 6 "Verifying native SmartRedis" step_verify_native_smartredis
+    run_step 7 "Building the OpenFOAM v2412 integration" step_build_openfoam
+    run_step 8 "Creating loader and update tooling" step_create_loader
+    run_step 9 "Registering the Jupyter kernel" step_register_jupyter_kernel
+    run_step 10 "Validating the installed environment" step_validate_installation
+    run_step 11 "Finalising installation" step_finish
+
+    echo
+    echo "Installation completed successfully."
+    echo "Full log: $LOG_FILE"
+}
+
+main "$@"
