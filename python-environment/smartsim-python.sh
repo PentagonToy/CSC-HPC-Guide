@@ -7,7 +7,7 @@
 #   - per-step logs and a combined installation log
 #   - failed-step log printed automatically
 #   - safe parallel compilation based on Slurm allocation or user override
-#   - optional PySR/Julia and OpenFOAM v2412 integration
+#   - optional PySR/Julia and CSC OpenFOAM module integration
 #   - Tykky environment, native SmartRedis, loader, updater, and Jupyter kernel
 
 # shellcheck shell=bash
@@ -34,9 +34,6 @@ readonly ARM64_CUDA_MODULE="cuda/12.9.1"
 
 readonly OPENFOAM_GCC_MODULE="gcc/15.2.0"
 readonly OPENFOAM_MPI_MODULE="openmpi/5.0.10"
-readonly OPENFOAM_RELEASE_TAG="v1.1.2"
-readonly OPENFOAM_RELEASE_BASE_URL="https://github.com/PentagonToy/SmartSim-CSC/releases/download/$OPENFOAM_RELEASE_TAG"
-readonly OPENFOAM_CHECKSUM_NAME="OpenFOAM-roihu-x86_64-SHA256SUMS"
 
 # ================================================================
 # GLOBAL STATE
@@ -394,28 +391,34 @@ prompt_yes_no() {
 prompt_openfoam_version() {
     local value
 
-    echo "Available OpenFOAM versions:"
-    echo "  1) v2412"
-    echo "  2) v2606"
+    echo "Available CSC OpenFOAM modules:"
+    echo "  1) openfoam/2412"
+    echo "  2) openfoam/2506"
+    echo "  3) openfoam/2512"
 
     while true; do
-        read -r -p "OpenFOAM version [v2412]: " value
-        value="${value:-v2412}"
+        read -r -p "OpenFOAM version [2412]: " value
+        value="${value:-2412}"
         value="${value#v}"
 
         case "$value" in
             2412|1)
                 OPENFOAM_VERSION="2412"
-                return
                 ;;
-            2606|2)
-                OPENFOAM_VERSION="2606"
-                return
+            2506|2)
+                OPENFOAM_VERSION="2506"
+                ;;
+            2512|3)
+                OPENFOAM_VERSION="2512"
                 ;;
             *)
-                echo "Choose v2412 or v2606."
+                echo "Choose 2412, 2506, or 2512."
+                continue
                 ;;
         esac
+
+        OPENFOAM_MODULE="openfoam/$OPENFOAM_VERSION"
+        return
     done
 }
 
@@ -535,17 +538,19 @@ collect_configuration() {
 
     if [ "$ENV_ARCH" = "x64" ]; then
         prompt_yes_no \
-            "Install prebuilt OpenFOAM and build the SmartSim integration? [Y/n]: " \
+            "Build the SmartSim integration for a CSC OpenFOAM module? [Y/n]: " \
             "yes" BUILD_OPENFOAM
 
         if [ "$BUILD_OPENFOAM" = "yes" ]; then
             prompt_openfoam_version
         else
             OPENFOAM_VERSION=""
+            OPENFOAM_MODULE=""
         fi
     else
         BUILD_OPENFOAM="no"
         OPENFOAM_VERSION=""
+        OPENFOAM_MODULE=""
     fi
 
     echo
@@ -563,6 +568,7 @@ collect_configuration() {
         "PySR / Julia" "$INSTALL_PYSR" \
         "OpenFOAM" "$BUILD_OPENFOAM" \
         "OpenFOAM version" "${OPENFOAM_VERSION:+v$OPENFOAM_VERSION}" \
+        "OpenFOAM module" "$OPENFOAM_MODULE" \
         "Parallel build jobs" "$BUILD_JOBS" \
         "Julia build threads" "$JULIA_BUILD_THREADS" \
         "SmartSim-CSC ref" "$SMARTSIM_CSC_REF"
@@ -585,12 +591,8 @@ set_global_paths() {
     export SMARTSIM_CSC_PROFILE
     export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
     export OPENFOAM_ROOT="$BASE_SCRATCH/OpenFOAM"
-    export OPENFOAM_SOURCE_ROOT="$OPENFOAM_ROOT/OpenFOAM-source"
-    export OPENFOAM_DOWNLOAD_DIR="$OPENFOAM_SOURCE_ROOT/downloads"
-    export OPENFOAM_INSTALL_DIR="$OPENFOAM_SOURCE_ROOT/OpenFOAM-v$OPENFOAM_VERSION"
-    export OPENFOAM_THIRDPARTY_DIR="$OPENFOAM_SOURCE_ROOT/ThirdParty-v$OPENFOAM_VERSION"
+    export OPENFOAM_MODULE
     export OPENFOAM_USER_DIR="$OPENFOAM_ROOT/OpenFOAM-v$OPENFOAM_VERSION"
-    export OPENFOAM_ARCHIVE_NAME="OpenFOAM-v$OPENFOAM_VERSION-roihu-x86_64-gcc15.2-openmpi5.0.10.tar.zst"
     export OPENFOAM_BUILD_SCRIPT="$SMARTSIM_CSC_DIR/scripts/openfoam/build-openfoam.sh"
     export TMP_BUILD_DIR="$BASE_SCRATCH/.tykky_runtime_smartsim_$ENV_ARCH"
 
@@ -1002,6 +1004,7 @@ export SMARTSIM_CMAKE_MODULE="$CMAKE_MODULE"
 export SMARTSIM_CUDA_MODULE="$CUDA_MODULE"
 export SMARTSIM_OPENFOAM_GCC_MODULE="$OPENFOAM_GCC_MODULE"
 export SMARTSIM_OPENFOAM_MPI_MODULE="$OPENFOAM_MPI_MODULE"
+export SMARTSIM_OPENFOAM_MODULE="$OPENFOAM_MODULE"
 export SMARTSIM_OPENFOAM_VERSION="$OPENFOAM_VERSION"
 export SMARTSIM_PYSR_ENABLED="$INSTALL_PYSR"
 export SMARTSIM_OPENFOAM_ENABLED="$BUILD_OPENFOAM"
@@ -1045,81 +1048,6 @@ step_verify_native_smartredis() {
         ldd "$SMARTREDIS_DIR/install/$lib_dir/libsmartredis-fortran.so"
 }
 
-download_file() {
-    local url="$1"
-    local output_path="$2"
-    local temporary_path="${output_path}.part"
-
-    mkdir -p "$(dirname "$output_path")"
-    rm -f "$temporary_path"
-
-    if command -v curl >/dev/null 2>&1; then
-        curl \
-            --fail \
-            --location \
-            --retry 3 \
-            --retry-delay 2 \
-            --output "$temporary_path" \
-            "$url"
-    elif command -v wget >/dev/null 2>&1; then
-        wget \
-            --tries=3 \
-            --waitretry=2 \
-            --output-document="$temporary_path" \
-            "$url"
-    else
-        echo "Neither curl nor wget is available."
-        return 1
-    fi
-
-    mv "$temporary_path" "$output_path"
-}
-
-install_openfoam_release() {
-    local archive_path
-    local checksum_path
-    local archive_url
-    local checksum_url
-
-    archive_path="$OPENFOAM_DOWNLOAD_DIR/$OPENFOAM_ARCHIVE_NAME"
-    checksum_path="$OPENFOAM_DOWNLOAD_DIR/$OPENFOAM_CHECKSUM_NAME"
-    archive_url="$OPENFOAM_RELEASE_BASE_URL/$OPENFOAM_ARCHIVE_NAME"
-    checksum_url="$OPENFOAM_RELEASE_BASE_URL/$OPENFOAM_CHECKSUM_NAME"
-
-    mkdir -p "$OPENFOAM_SOURCE_ROOT" "$OPENFOAM_DOWNLOAD_DIR"
-
-    if [ ! -f "$checksum_path" ]; then
-        download_file "$checksum_url" "$checksum_path"
-    fi
-
-    if [ ! -f "$archive_path" ]; then
-        download_file "$archive_url" "$archive_path"
-    fi
-
-    (
-        cd "$OPENFOAM_DOWNLOAD_DIR"
-        grep " $OPENFOAM_ARCHIVE_NAME$" "$OPENFOAM_CHECKSUM_NAME" \
-            | sha256sum -c -
-    )
-
-    if [ \
-        ! -f "$OPENFOAM_INSTALL_DIR/etc/bashrc" \
-        ] || [ \
-        ! -x "$OPENFOAM_INSTALL_DIR/platforms/linux64GccDPInt32Opt/bin/simpleFoam" \
-        ]; then
-        rm -rf "$OPENFOAM_INSTALL_DIR" "$OPENFOAM_THIRDPARTY_DIR"
-
-        tar \
-            --zstd \
-            --extract \
-            --file "$archive_path" \
-            --directory "$OPENFOAM_SOURCE_ROOT"
-    fi
-
-    test -f "$OPENFOAM_INSTALL_DIR/etc/bashrc"
-    test -x "$OPENFOAM_INSTALL_DIR/platforms/linux64GccDPInt32Opt/bin/simpleFoam"
-    test -d "$OPENFOAM_THIRDPARTY_DIR"
-}
 
 step_build_openfoam() {
     local smartredis_lib_dir
@@ -1137,19 +1065,21 @@ step_build_openfoam() {
         echo "OpenFOAM integration build script not found:"
         echo "  $OPENFOAM_BUILD_SCRIPT"
         echo
-        echo "The selected base OpenFOAM release can be installed, but"
-        echo "SmartSim-CSC must provide a matching integration build script."
+        echo "The selected SmartSim-CSC ref must provide build-openfoam.sh."
         return 1
     fi
 
     module --force purge
     module load "$OPENFOAM_GCC_MODULE"
     module load "$OPENFOAM_MPI_MODULE"
+    module load "$OPENFOAM_MODULE"
 
-    install_openfoam_release
-
-    # shellcheck disable=SC1090
-    source "$OPENFOAM_INSTALL_DIR/etc/bashrc"
+    if [ "${WM_PROJECT_VERSION:-}" != "v$OPENFOAM_VERSION" ]; then
+        echo "Loaded OpenFOAM version does not match the selection."
+        echo "Expected: v$OPENFOAM_VERSION"
+        echo "Loaded:   ${WM_PROJECT_VERSION:-not loaded}"
+        return 1
+    fi
 
     export FOAM_USER_DIR="$OPENFOAM_USER_DIR"
     export WM_PROJECT_USER_DIR="$OPENFOAM_USER_DIR"
@@ -1240,9 +1170,6 @@ export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
 export SMARTREDIS_INCLUDE="$SMARTREDIS_DIR/install/include"
 export SMARTREDIS_DEP_INCLUDE="$SMARTREDIS_DIR/install/include"
 export OPENFOAM_ROOT="$BASE_SCRATCH/OpenFOAM"
-export OPENFOAM_SOURCE_ROOT="$OPENFOAM_ROOT/OpenFOAM-source"
-export OPENFOAM_INSTALL_DIR="$OPENFOAM_SOURCE_ROOT/OpenFOAM-v${SMARTSIM_OPENFOAM_VERSION:-2412}"
-export OPENFOAM_THIRDPARTY_DIR="$OPENFOAM_SOURCE_ROOT/ThirdParty-v${SMARTSIM_OPENFOAM_VERSION:-2412}"
 export OPENFOAM_USER_DIR="$OPENFOAM_ROOT/OpenFOAM-v${SMARTSIM_OPENFOAM_VERSION:-2412}"
 
 if [ ! -x "$ENV_PREFIX/bin/python" ]; then
@@ -1288,16 +1215,14 @@ if [ "$SMARTSIM_OPENFOAM_ENABLED" = "yes" ] && [ "$ENV_ARCH" = "x64" ]; then
         module --force purge
         module load \
             "$SMARTSIM_OPENFOAM_GCC_MODULE" \
-            "$SMARTSIM_OPENFOAM_MPI_MODULE"
+            "$SMARTSIM_OPENFOAM_MPI_MODULE" \
+            "$SMARTSIM_OPENFOAM_MODULE"
     fi
 
-    if [ ! -f "$OPENFOAM_INSTALL_DIR/etc/bashrc" ]; then
-        echo "OpenFOAM installation not found: $OPENFOAM_INSTALL_DIR"
+    if [ "${WM_PROJECT_VERSION:-}" != "v${SMARTSIM_OPENFOAM_VERSION:-2412}" ]; then
+        echo "Loaded OpenFOAM module does not match the runtime configuration."
         return 1
     fi
-
-    # shellcheck disable=SC1090
-    source "$OPENFOAM_INSTALL_DIR/etc/bashrc"
 
     export FOAM_USER_DIR="$OPENFOAM_USER_DIR"
     export WM_PROJECT_USER_DIR="$OPENFOAM_USER_DIR"
@@ -1707,6 +1632,9 @@ step_finish() {
     printf 'Load with: source "%s"\n' "$BASE_SCRATCH/Python4SmartSim.sh"
     printf 'Update packages with: smartsim-update <package>\n'
     printf 'SmartSim-CSC ref: %s\n' "$SMARTSIM_CSC_REF"
+    if [ "$BUILD_OPENFOAM" = "yes" ]; then
+        printf 'OpenFOAM module: %s\n' "$OPENFOAM_MODULE"
+    fi
     printf 'Parallel build jobs: %s\n' "$BUILD_JOBS"
 }
 
@@ -1722,7 +1650,7 @@ main() {
     run_step 4 "Preparing the writable Julia runtime" step_prepare_julia_runtime
     run_step 5 "Building native SmartRedis" step_build_native_smartredis
     run_step 6 "Verifying native SmartRedis" step_verify_native_smartredis
-    run_step 7 "Installing OpenFOAM and building its SmartSim integration" step_build_openfoam
+    run_step 7 "Building the CSC OpenFOAM SmartSim integration" step_build_openfoam
     run_step 8 "Creating loader and update tooling" step_create_loader
     run_step 9 "Registering the Jupyter kernel" step_register_jupyter_kernel
     run_step 10 "Validating the installed environment" step_validate_installation
