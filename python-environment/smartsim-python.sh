@@ -819,7 +819,7 @@ uv pip install \
 uv pip install \
     --link-mode=copy \
     --no-deps \
-    "git+${SMARTSIM_CSC_REPO}@${SMARTSIM_CSC_REF}#subdirectory=components/openfoam-smartsim/python"
+    "git+${SMARTSIM_CSC_REPO}@${SMARTSIM_CSC_REF}#subdirectory=components/foampilot"
 
 if [ "$INSTALL_PYSR" = "yes" ]; then
     PYTHON_PREFIX="$(python -c 'import sys; print(sys.prefix)')"
