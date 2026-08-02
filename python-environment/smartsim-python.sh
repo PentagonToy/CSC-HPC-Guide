@@ -23,7 +23,7 @@ set -Eeuo pipefail
 # USER CONFIGURATION
 # ================================================================
 readonly SMARTSIM_CSC_REPO="https://github.com/PentagonToy/SmartSim-CSC.git"
-readonly SMARTSIM_CSC_REF="bb7c56b80ae56ce654fe6c8b8a08152626dce431"
+readonly SMARTSIM_CSC_REF="de75202da2e68d0ce0d784671d3cb76c41440e9f"
 
 readonly X64_GCC_MODULE="gcc/13.4.0"
 readonly X64_CMAKE_MODULE="cmake/3.26.5"
