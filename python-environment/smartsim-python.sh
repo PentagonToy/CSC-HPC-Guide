@@ -23,7 +23,7 @@ set -Eeuo pipefail
 # USER CONFIGURATION
 # ================================================================
 readonly SMARTSIM_CSC_REPO="https://github.com/PentagonToy/SmartSim-CSC.git"
-readonly SMARTSIM_CSC_REF="97ea98a3152c4064eb2ddfcce0a60bc9f6bd6425"
+readonly SMARTSIM_CSC_REF="6449e3bf93a2cf529d34b0015f11fad035b28d47"
 
 readonly X64_GCC_MODULE="gcc/13.4.0"
 readonly X64_CMAKE_MODULE="cmake/3.26.5"
@@ -593,7 +593,6 @@ set_global_paths() {
     export OPENFOAM_ROOT="$BASE_SCRATCH/OpenFOAM"
     export OPENFOAM_MODULE
     export OPENFOAM_USER_DIR="$OPENFOAM_ROOT/OpenFOAM-v$OPENFOAM_VERSION"
-    export OPENFOAM_BUILD_SCRIPT="$SMARTSIM_CSC_DIR/scripts/openfoam/build-openfoam.sh"
     export TMP_BUILD_DIR="$BASE_SCRATCH/.tykky_runtime_smartsim_$ENV_ARCH"
 
     mkdir -p "$PYTHON_ROOT/envs" "$TMP_BUILD_DIR"
@@ -881,14 +880,15 @@ git -C "$SMARTSIM_CSC_DIR" clean -ffdx
 export USE_SYSTEMD=no
 export PYTHONNOUSERSITE=1
 
-PYTHON="$(command -v python)" \
-SMART="$(dirname "$(command -v python)")/smart" \
-PROFILE="$SMARTSIM_CSC_PROFILE" \
 PYTHONNOUSERSITE=1 \
 BUILD_JOBS="$BUILD_JOBS" \
 MAKEFLAGS="-j$BUILD_JOBS" \
 CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS" \
-    "$SMARTSIM_CSC_DIR/scripts/install.sh"
+    python -m foampilot.cli install runtime \
+        --repository-root "$SMARTSIM_CSC_DIR" \
+        --profile "$SMARTSIM_CSC_PROFILE" \
+        --python "$(command -v python)" \
+        --smart "$(dirname "$(command -v python)")/smart"
 
 uv pip install \
     --link-mode=copy \
@@ -1012,25 +1012,10 @@ export SMARTSIM_BUILD_JOBS="$BUILD_JOBS"
 EOF_RUNTIME
     chmod 600 "$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
 
-    if [ ! -d "$SMARTSIM_CSC_DIR/components/smartredis" ]; then
-        echo "SmartRedis source not found: $SMARTSIM_CSC_DIR/components/smartredis"
-        return 1
-    fi
-
-    rm -rf "$SMARTREDIS_DIR"
-    mkdir -p "$SMARTREDIS_DIR"
-    cp -a "$SMARTSIM_CSC_DIR/components/smartredis/." "$SMARTREDIS_DIR/"
-
-    cd "$SMARTREDIS_DIR"
-    rm -rf build install
-
-    env \
-        -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS \
-        -u CC -u CXX -u FC \
-        CC=gcc CXX=g++ FC=gfortran \
-        MAKEFLAGS="-j$BUILD_JOBS" \
-        CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS" \
-        make -j "$BUILD_JOBS" lib-with-fortran
+    "$ENV_PREFIX/bin/python" -m foampilot.cli install smartredis \
+        --repository-root "$SMARTSIM_CSC_DIR" \
+        --smartredis-dir "$SMARTREDIS_DIR" \
+        --build-jobs "$BUILD_JOBS"
 }
 
 step_verify_native_smartredis() {
@@ -1050,22 +1035,12 @@ step_verify_native_smartredis() {
 
 
 step_build_openfoam() {
-    local smartredis_lib_dir
-
     if [ "$BUILD_OPENFOAM" != "yes" ]; then
         return
     fi
 
     if [ "$ENV_ARCH" != "x64" ]; then
         echo "OpenFOAM integration is supported only on x86_64."
-        return 1
-    fi
-
-    if [ ! -x "$OPENFOAM_BUILD_SCRIPT" ]; then
-        echo "OpenFOAM integration build script not found:"
-        echo "  $OPENFOAM_BUILD_SCRIPT"
-        echo
-        echo "The selected SmartSim-CSC ref must provide build-openfoam.sh."
         return 1
     fi
 
@@ -1087,34 +1062,13 @@ step_build_openfoam() {
     export FOAM_USER_LIBBIN="$OPENFOAM_USER_DIR/platforms/$WM_OPTIONS/lib"
     export WM_NCOMPPROCS="$BUILD_JOBS"
 
-    export SMARTREDIS_INCLUDE="$SMARTREDIS_DIR/install/include"
-    export SMARTREDIS_DEP_INCLUDE="$SMARTREDIS_DIR/install/include"
-
-    if [ -d "$SMARTREDIS_DIR/install/lib64" ]; then
-        smartredis_lib_dir="$SMARTREDIS_DIR/install/lib64"
-    else
-        smartredis_lib_dir="$SMARTREDIS_DIR/install/lib"
-    fi
-    export SMARTREDIS_LIB="$smartredis_lib_dir"
-
     rm -rf "$OPENFOAM_USER_DIR"
-    mkdir -p "$FOAM_USER_APPBIN" "$FOAM_USER_LIBBIN"
 
-    cd "$SMARTSIM_CSC_DIR"
-    WM_NCOMPPROCS="$BUILD_JOBS" \
-    MAKEFLAGS="-j$BUILD_JOBS" \
-        "$OPENFOAM_BUILD_SCRIPT"
-
-    export LD_LIBRARY_PATH="$smartredis_lib_dir:$FOAM_USER_LIBBIN${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-
-    for executable in foamSmartSimSvd foamSmartSimSvdDBAPI svdToFoam; do
-        test -x "$FOAM_USER_APPBIN/$executable"
-    done
-
-    if ldd "$FOAM_USER_APPBIN/foamSmartSimSvdDBAPI" | grep -q "not found"; then
-        ldd "$FOAM_USER_APPBIN/foamSmartSimSvdDBAPI"
-        return 1
-    fi
+    "$ENV_PREFIX/bin/python" -m foampilot.cli install openfoam \
+        --repository-root "$SMARTSIM_CSC_DIR" \
+        --smartredis-dir "$SMARTREDIS_DIR" \
+        --foam-user-dir "$OPENFOAM_USER_DIR" \
+        --openfoam-version "$OPENFOAM_VERSION"
 }
 
 step_create_loader() {
@@ -1598,32 +1552,15 @@ EOF_KERNEL_JSON
 }
 
 step_validate_installation() {
-    local lib_dir
-
     # shellcheck disable=SC1090
     SMARTSIM_ENV_QUIET=1 source "$BASE_SCRATCH/Python4SmartSim.sh"
 
-    "$ENV_PREFIX/bin/python" - <<'PY'
-import importlib
-
-for module_name in ("jax", "smartsim", "smartredis", "foampilot"):
-    module = importlib.import_module(module_name)
-    version = getattr(module, "__version__", "unknown")
-    print(f"{module_name}: {version}")
-PY
-
-    if [ -d "$SMARTREDIS_DIR/install/lib64" ]; then
-        lib_dir="lib64"
-    else
-        lib_dir="lib"
-    fi
-
-    test -f "$SMARTREDIS_DIR/install/$lib_dir/libsmartredis.so"
-    test -f "$SMARTREDIS_DIR/install/$lib_dir/libsmartredis-fortran.so"
+    "$ENV_PREFIX/bin/python" -m foampilot.cli doctor
 
     if [ "$INSTALL_PYSR" = "yes" ]; then
         "$ENV_PREFIX/bin/python" - <<'PY'
 import pysr
+
 print(f"PySR: {pysr.__version__}")
 PY
     fi
@@ -1649,12 +1586,12 @@ main() {
     run_step 2 "Creating configuration and build scripts" step_create_configuration
     run_step 3 "Building the Tykky Python environment" step_build_tykky
     run_step 4 "Preparing the writable Julia runtime" step_prepare_julia_runtime
-    run_step 5 "Building native SmartRedis" step_build_native_smartredis
+    run_step 5 "Installing native SmartRedis through FoamPilot" step_build_native_smartredis
     run_step 6 "Verifying native SmartRedis" step_verify_native_smartredis
-    run_step 7 "Building the CSC OpenFOAM SmartSim integration" step_build_openfoam
+    run_step 7 "Installing the OpenFOAM integration through FoamPilot" step_build_openfoam
     run_step 8 "Creating loader and update tooling" step_create_loader
     run_step 9 "Registering the Jupyter kernel" step_register_jupyter_kernel
-    run_step 10 "Validating the installed environment" step_validate_installation
+    run_step 10 "Validating the installation with FoamPilot doctor" step_validate_installation
     run_step 11 "Finalising installation" step_finish
 
     echo

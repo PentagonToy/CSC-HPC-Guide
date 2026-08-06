@@ -45,14 +45,14 @@ The installer provides:
 - ONNX Runtime and JAX RedisAI backends
 - Native SmartRedis C/C++/Fortran library
 - Optional PySR and Julia
-- Optional OpenFOAM.com v2412 integration
+- Optional CSC OpenFOAM integration
 - Jupyter kernel registration
 - Compact spinner-based terminal output
 - Per-step logs and a combined installation log
 - Architecture-aware parallel compilation
 - `smartsim-update` for ordinary Python package updates
 
-OpenFOAM v2412 integration is available only for the `x86_64` profile. It is automatically disabled for the `aarch64` profile.
+OpenFOAM integration is available only for the `x86_64` profile. The installer supports OpenFOAM 2412, 2506, and 2512, and automatically disables the integration for the `aarch64` profile.
 
 ---
 
@@ -65,14 +65,14 @@ Repository:
 https://github.com/PentagonToy/SmartSim-CSC.git
 
 Commit:
-97ea98a3152c4064eb2ddfcce0a60bc9f6bd6425
+6449e3bf93a2cf529d34b0015f11fad035b28d47
 ```
 
 These values are defined near the beginning of `smartsim-python.sh`:
 
 ```bash
 readonly SMARTSIM_CSC_REPO="https://github.com/PentagonToy/SmartSim-CSC.git"
-readonly SMARTSIM_CSC_REF="97ea98a3152c4064eb2ddfcce0a60bc9f6bd6425"
+readonly SMARTSIM_CSC_REF="6449e3bf93a2cf529d34b0015f11fad035b28d47"
 ```
 
 The checkout is stored at:
@@ -127,7 +127,7 @@ CUDA:
 cuda/12.9.1
 ```
 
-### OpenFOAM v2412 integration
+### OpenFOAM integration
 
 The optional OpenFOAM build uses:
 
@@ -140,6 +140,8 @@ openmpi/5.0.10
 
 OpenFOAM:
 openfoam/2412
+openfoam/2506
+openfoam/2512
 ```
 
 The OpenFOAM integration is built only when:
@@ -165,7 +167,7 @@ The installer asks for:
 2. Project user directory
 3. Environment nickname
 4. Optional PySR/Julia installation
-5. Optional OpenFOAM v2412 integration on `x86_64`
+5. Optional OpenFOAM integration on `x86_64`
 6. Number of parallel build jobs
 
 The project number is entered twice for verification.
@@ -307,28 +309,39 @@ dependencies:
   - ninja
 ```
 
-The post-install script then performs the following actions:
+The Tykky post-install script performs the following actions:
 
-1. Installs `uv`
-2. Installs the ordinary Python requirements
-3. Optionally installs and prepares PySR/Julia
-4. Clones the pinned SmartSim-CSC repository
-5. Runs the SmartSim-CSC installer
-6. Installs FoamPilot from the pinned checkout
-7. Restores the ordinary Python requirements
-8. Runs `uv pip check`
-9. Records installed package versions
+- Installs `uv`
+- Installs the ordinary Python requirements
+- Installs FoamPilot from the pinned SmartSim-CSC checkout
+- Optionally installs and prepares PySR/Julia
+- Clones the pinned SmartSim-CSC repository
+- Checks out the pinned commit in detached HEAD mode
+- Installs the SmartSim runtime through the FoamPilot CLI
+- Restores the ordinary Python requirements
+- Runs `uv pip check`
+- Records installed package versions
 
-The SmartSim-CSC installer is invoked with:
+FoamPilot is installed from the same immutable SmartSim-CSC commit:
 
 ```bash
-PYTHON="$(command -v python)" \
-SMART="$(dirname "$(command -v python)")/smart" \
-PROFILE="$SMARTSIM_CSC_PROFILE" \
-    "$SMARTSIM_CSC_DIR/scripts/install.sh"
+uv pip install \
+    --link-mode=copy \
+    --no-deps \
+    "git+${SMARTSIM_CSC_REPO}@${SMARTSIM_CSC_REF}#subdirectory=components/foampilot"
 ```
 
----
+The SmartSim runtime installation is delegated to FoamPilot:
+
+```bash
+python -m foampilot.cli install runtime \
+    --repository-root "$SMARTSIM_CSC_DIR" \
+    --profile "$SMARTSIM_CSC_PROFILE" \
+    --python "$(command -v python)" \
+    --smart "$(dirname "$(command -v python)")/smart"
+```
+
+The FoamPilot runtime command delegates to the installer contained in the pinned SmartSim-CSC repository.
 
 ## 8. Python Requirements
 
@@ -374,10 +387,12 @@ TensorFlow and PyTorch are installed as regular Python packages. The RedisAI bac
 
 ## 9. SmartSim-CSC Installation
 
-The SmartSim-CSC installation is performed by:
+SmartSim-CSC installation is exposed through the FoamPilot installation interface:
 
 ```bash
-$SMARTSIM_CSC_DIR/scripts/install.sh
+python -m foampilot.cli install runtime \
+    --repository-root "$SMARTSIM_CSC_DIR" \
+    --profile "$SMARTSIM_CSC_PROFILE"
 ```
 
 The profile is automatically selected:
@@ -387,21 +402,23 @@ x86_64  -> linux-x64-cpu
 aarch64 -> linux-arm64-gpu
 ```
 
-The SmartSim-CSC installer is responsible for:
+The runtime installation is responsible for:
 
-- Installing SmartSim
-- Installing SmartRedis
+- Installing the SmartSim Python package
+- Installing the SmartRedis Python package
 - Building Redis
 - Building RedisAI
 - Building the selected ONNX Runtime backend
 - Building the selected JAX backend
 - Checking Python dependencies
-- Verifying build artifacts
+- Verifying runtime build artifacts
 - Running the relevant SmartSim validation
+
+FoamPilot provides the user-facing command, while the implementation remains in the pinned SmartSim-CSC repository.
 
 The selected profiles are:
 
-```text
+```toml
 [profiles.linux-x64-cpu]
 device = "cpu"
 backends = ["onnxruntime", "jax"]
@@ -409,13 +426,11 @@ backends = ["onnxruntime", "jax"]
 
 and:
 
-```text
+```toml
 [profiles.linux-arm64-gpu]
 device = "cuda-12"
 backends = ["onnxruntime", "jax"]
 ```
-
----
 
 ## 10. Optional PySR and Julia
 
@@ -462,44 +477,36 @@ the installer:
 
 The native SmartRedis library is required for C, C++, Fortran, and linked simulation applications.
 
-The source is copied from the pinned SmartSim-CSC checkout:
-
-```text
-$SMARTSIM_CSC_DIR/components/smartredis
-```
-
-It is copied to:
-
-```text
-$SMARTREDIS_DIR
-```
-
-where:
+The architecture-specific SmartRedis root directory is:
 
 ```text
 SMARTREDIS_DIR=$BASE_SCRATCH/SmartRedis-$ENV_ARCH
 ```
 
-The build command is:
+The native build is delegated to FoamPilot:
 
 ```bash
-env \
-    -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS \
-    -u CC -u CXX -u FC \
-    CC=gcc \
-    CXX=g++ \
-    FC=gfortran \
-    make -j "$BUILD_JOBS" lib-with-fortran
+"$ENV_PREFIX/bin/python" -m foampilot.cli install smartredis \
+    --repository-root "$SMARTSIM_CSC_DIR" \
+    --smartredis-dir "$SMARTREDIS_DIR" \
+    --build-jobs "$BUILD_JOBS"
 ```
 
-Expected libraries include:
+FoamPilot copies the bundled SmartRedis source into the architecture-specific external workspace and performs a clean native build there. This prevents `x86_64` and `aarch64` CMake caches and build artifacts from sharing the same source-tree build directory.
+
+The resulting layout is:
 
 ```text
-libsmartredis.so
-libsmartredis-fortran.so
+$SMARTREDIS_DIR/
+├── build/
+└── install/
+    ├── include/
+    └── lib/ or lib64/
+        ├── libsmartredis.so
+        └── libsmartredis-fortran.so
 ```
 
-The installation directory is either:
+The installation library directory is therefore either:
 
 ```text
 $SMARTREDIS_DIR/install/lib
@@ -511,55 +518,55 @@ or:
 $SMARTREDIS_DIR/install/lib64
 ```
 
-The native library is built separately for each architecture.
+The native library is built separately for each architecture. The installer retains a separate verification step that checks the Fortran library and its dynamic dependencies with `ldd`.
 
----
+## 12. Optional OpenFOAM Integration
 
-## 12. Optional OpenFOAM v2412 Integration
+The OpenFOAM integration is available only for the `x86_64` profile.
 
-The OpenFOAM integration is available only on the `x86_64` profile.
-
-The installer asks:
+The installer supports the following CSC OpenFOAM modules:
 
 ```text
-Build the bundled OpenFOAM v2412 integration? [Y/n]:
+openfoam/2412
+openfoam/2506
+openfoam/2512
 ```
 
-The integration uses:
+The installer asks for the desired version and loads the corresponding OpenFOAM module together with:
 
 ```text
-OpenFOAM.com v2412
 GCC 15.2.0
 OpenMPI 5.0.10
 ```
 
-The build script is:
-
-```bash
-$SMARTSIM_CSC_DIR/scripts/openfoam/build-openfoam-v2412.sh
-```
-
-The project-scoped OpenFOAM location is:
+The project-scoped OpenFOAM user build location is:
 
 ```text
-$BASE_SCRATCH/OpenFOAM/OpenFOAM-v2412
+$BASE_SCRATCH/OpenFOAM/OpenFOAM-v$OPENFOAM_VERSION
 ```
 
-The installer sets:
+The installer prepares the CSC module environment and sets:
 
 ```bash
 export FOAM_USER_DIR="$OPENFOAM_USER_DIR"
 export WM_PROJECT_USER_DIR="$OPENFOAM_USER_DIR"
+export FOAM_USER_APPBIN="$OPENFOAM_USER_DIR/platforms/$WM_OPTIONS/bin"
+export FOAM_USER_LIBBIN="$OPENFOAM_USER_DIR/platforms/$WM_OPTIONS/lib"
 ```
 
-The expected user binary and library directories are:
+The actual integration build is delegated to FoamPilot:
 
 ```bash
-$FOAM_USER_DIR/platforms/$WM_OPTIONS/bin
-$FOAM_USER_DIR/platforms/$WM_OPTIONS/lib
+"$ENV_PREFIX/bin/python" -m foampilot.cli install openfoam \
+    --repository-root "$SMARTSIM_CSC_DIR" \
+    --smartredis-dir "$SMARTREDIS_DIR" \
+    --foam-user-dir "$OPENFOAM_USER_DIR" \
+    --openfoam-version "$OPENFOAM_VERSION"
 ```
 
-The build verifies these executables:
+FoamPilot locates the OpenFOAM build adapter from the pinned SmartSim-CSC checkout and builds the bundled libraries, closure models, function objects, motion solver, utilities, and launcher.
+
+Expected applications include:
 
 ```text
 foamSmartSimSvd
@@ -567,15 +574,7 @@ foamSmartSimSvdDBAPI
 svdToFoam
 ```
 
-It also checks that the OpenFOAM executable dependencies do not contain:
-
-```text
-not found
-```
-
-The OpenFOAM build is skipped automatically for `aarch64`.
-
----
+The OpenFOAM integration is skipped automatically for `aarch64`.
 
 ## 13. Environment Loader
 
@@ -691,62 +690,49 @@ Load the environment:
 source "$BASE_SCRATCH/Python4SmartSim.sh"
 ```
 
-Check Python packages:
+The installer performs the primary stack validation through FoamPilot doctor:
 
 ```bash
-python - <<'PY'
-import importlib
-import sys
-
-print("Python:", sys.version)
-
-for module_name in (
-    "numpy",
-    "jax",
-    "smartsim",
-    "smartredis",
-    "foampilot",
-):
-    module = importlib.import_module(module_name)
-    print(f"{module_name}: {getattr(module, '__version__', 'unknown')}")
-PY
+python -m foampilot.cli doctor
 ```
 
-Run the dependency check:
+The doctor checks the available installation components, including:
+
+- FoamPilot, SmartSim, SmartRedis, and JAX imports
+- The SmartSim database executable
+- The RedisAI module
+- Native SmartRedis libraries when configured
+- OpenFOAM libraries and applications when enabled
+- The bundled OpenFOAM closure model symbols
+
+The installer separately validates PySR when its optional Julia environment is enabled.
+
+For manual validation, run:
+
+```bash
+foampilot doctor
+```
+
+The dependency set can also be checked with:
 
 ```bash
 uv pip check
 ```
 
-The SmartSim-CSC installer runs profile-specific validation during installation.
-
-For manual validation:
-
-```bash
-smart validate --device cpu
-```
-
-For the GPU profile, run validation from an allocated GPU node:
-
-```bash
-module load cuda/12.9.1
-smart validate --device gpu
-```
-
-Check the SmartSim-CSC versions:
+Inspect the pinned SmartSim-CSC versions with:
 
 ```bash
 python "$SMARTSIM_CSC_DIR/scripts/check_versions.py"
 ```
 
-Inspect the selected profile:
+Inspect the selected stack profile with:
 
 ```bash
 python "$SMARTSIM_CSC_DIR/scripts/stack_config.py" \
     --profile "$SMARTSIM_CSC_PROFILE"
 ```
 
-Check the native SmartRedis library:
+For direct native SmartRedis dependency inspection:
 
 ```bash
 if [ -f "$SMARTREDIS_DIR/install/lib64/libsmartredis-fortran.so" ]; then
@@ -758,8 +744,6 @@ else
     exit 1
 fi
 ```
-
----
 
 ## 16. Installation Logs
 
@@ -790,12 +774,12 @@ There are eleven installation steps:
 2. Creating configuration and build scripts
 3. Building the Tykky Python environment
 4. Preparing the writable Julia runtime
-5. Building native SmartRedis
+5. Installing native SmartRedis through FoamPilot
 6. Verifying native SmartRedis
-7. Building the OpenFOAM v2412 integration
+7. Installing the OpenFOAM integration through FoamPilot
 8. Creating loader and update tooling
 9. Registering the Jupyter kernel
-10. Validating the installed environment
+10. Validating the installation with FoamPilot doctor
 11. Finalising the installation
 
 When a step fails, its log is printed automatically.
@@ -1043,4 +1027,4 @@ The native SmartRedis library is installed separately under:
 $BASE_SCRATCH/SmartRedis-$ENV_ARCH
 ```
 
-The optional OpenFOAM v2412 integration is installed only when explicitly enabled on `x86_64`.
+The optional OpenFOAM integration is installed only when explicitly enabled on `x86_64`.
