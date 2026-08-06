@@ -44,6 +44,7 @@ CURRENT_STEP_NUMBER=0
 CURRENT_STEP_LOG=""
 LOG_FILE=""
 STATUS_PID=""
+INSTALL_START_SECONDS=0
 
 cleanup_status() {
     if [ -n "${STATUS_PID:-}" ]; then
@@ -164,10 +165,27 @@ truncate_text() {
     fi
 }
 
+format_elapsed_time() {
+    local total_seconds="$1"
+    local hours
+    local minutes
+    local seconds
+
+    hours=$((total_seconds / 3600))
+    minutes=$(((total_seconds % 3600) / 60))
+    seconds=$((total_seconds % 60))
+
+    printf '%02d:%02d:%02d' \
+        "$hours" \
+        "$minutes" \
+        "$seconds"
+}
+
 start_step_status() {
     local step_number="$1"
     local description="$2"
     local step_log="$3"
+    local step_start_seconds="$4"
 
     local frames=(
         '⠋' '⠙' '⠹' '⠸' '⠼'
@@ -183,23 +201,47 @@ start_step_status() {
         return
     fi
 
-    # Print the full status line only once. The background renderer updates
-    # only the first spinner character, so terminal resizing cannot duplicate
-    # the complete step description.
-    printf '%s%s%s ' "$COLOR_BLUE" "${frames[0]}" "$COLOR_RESET"
-    print_step_prefix "$step_number"
-    printf ' %s' "$description"
-
     (
         local frame_index=0
         local frame
+        local elapsed_seconds
+        local elapsed_text
+        local columns
+        local fixed_length
+        local description_length
+        local visible_description
 
         while true; do
             frame="${frames[frame_index % ${#frames[@]}]}"
-            printf '\r%s%s%s' \
+            elapsed_seconds=$((SECONDS - step_start_seconds))
+            elapsed_text="$(format_elapsed_time "$elapsed_seconds")"
+            columns="$(get_terminal_columns)"
+
+            # Reserve room for the spinner, step counter, timer, and spaces.
+            fixed_length=$((30 + ${#elapsed_text}))
+            description_length=$((columns - fixed_length))
+
+            if [ "$description_length" -lt 10 ]; then
+                description_length=10
+            fi
+
+            visible_description="$(
+                truncate_text \
+                    "$description" \
+                    "$description_length"
+            )"
+
+            printf '\r%s%s%s ' \
                 "$COLOR_BLUE" \
                 "$frame" \
                 "$COLOR_RESET"
+            print_step_prefix "$step_number"
+            printf ' %s %s[%s]%s%s' \
+                "$visible_description" \
+                "$COLOR_DIM" \
+                "$elapsed_text" \
+                "$COLOR_RESET" \
+                "$CLEAR_LINE"
 
             frame_index=$((frame_index + 1))
             sleep 0.10
@@ -212,20 +254,31 @@ start_step_status() {
 finish_step_success() {
     local step_number="$1"
     local description="$2"
+    local duration_seconds="$3"
+    local duration_text
+
+    duration_text="$(format_elapsed_time "$duration_seconds")"
 
     cleanup_status
 
     if [ -t 1 ]; then
-        # Replace only the spinner character and keep the original line.
-        printf '\r%s✓%s\n' \
+        printf '\r%s✓%s ' \
             "$COLOR_GREEN" \
             "$COLOR_RESET"
+        print_step_prefix "$step_number"
+        printf ' %s %s[%s]%s%s\n' \
+            "$description" \
+            "$COLOR_DIM" \
+            "$duration_text" \
+            "$COLOR_RESET" \
+            "$CLEAR_LINE"
     else
         print_step_prefix "$step_number"
-        printf ' %s %s✓%s\n' \
+        printf ' %s %s✓%s [%s]\n' \
             "$description" \
             "$COLOR_GREEN" \
-            "$COLOR_RESET"
+            "$COLOR_RESET" \
+            "$duration_text"
     fi
 }
 
@@ -234,20 +287,31 @@ finish_step_failure() {
     local description="$2"
     local exit_code="$3"
     local step_log="$4"
+    local duration_seconds="$5"
+    local duration_text
+
+    duration_text="$(format_elapsed_time "$duration_seconds")"
 
     cleanup_status
 
     if [ -t 1 ]; then
-        # Replace only the spinner character and keep the original line.
-        printf '\r%s✗%s\n' \
+        printf '\r%s✗%s ' \
             "$COLOR_RED" \
             "$COLOR_RESET"
+        print_step_prefix "$step_number"
+        printf ' %s %s[%s]%s%s\n' \
+            "$description" \
+            "$COLOR_DIM" \
+            "$duration_text" \
+            "$COLOR_RESET" \
+            "$CLEAR_LINE"
     else
         print_step_prefix "$step_number"
-        printf ' %s %sFAILED%s\n' \
+        printf ' %s %sFAILED%s [%s]\n' \
             "$description" \
             "$COLOR_RED" \
-            "$COLOR_RESET"
+            "$COLOR_RESET" \
+            "$duration_text"
     fi
 
     printf '%s\n' '------------------------------------------------------------------'
@@ -258,6 +322,7 @@ finish_step_failure() {
         "$exit_code" \
         "$COLOR_RESET"
     printf 'Description: %s\n' "$description"
+    printf 'Duration:    %s\n' "$duration_text"
     printf 'Step log:    %s\n' "$step_log"
     printf '%s\n' '------------------------------------------------------------------'
     cat "$step_log"
@@ -272,29 +337,59 @@ run_step() {
 
     local exit_code
     local step_log
+    local step_start_seconds
+    local step_end_seconds
+    local duration_seconds
+    local duration_text
+    local start_timestamp
+    local end_timestamp
 
     CURRENT_STEP_NUMBER="$step_number"
     CURRENT_STEP="$description"
     step_log="$PYTHON_ROOT/logs/step-$(printf '%02d' "$step_number")-$ENV_ARCH.log"
     CURRENT_STEP_LOG="$step_log"
 
+    step_start_seconds="$SECONDS"
+    start_timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+
     : > "$step_log"
     {
-        printf '[%s]\n' "$(date '+%Y-%m-%d %H:%M:%S')"
-        printf 'Step %d/%d: %s\n' "$step_number" "$TOTAL_STEPS" "$description"
+        printf 'Start time: %s\n' "$start_timestamp"
+        printf 'Step %d/%d: %s\n' \
+            "$step_number" \
+            "$TOTAL_STEPS" \
+            "$description"
         printf 'Build jobs: %s\n\n' "$BUILD_JOBS"
     } >> "$step_log"
 
-    start_step_status "$step_number" "$description" "$step_log"
+    start_step_status \
+        "$step_number" \
+        "$description" \
+        "$step_log" \
+        "$step_start_seconds"
 
     set +e
     "$@" >> "$step_log" 2>&1
     exit_code=$?
     set -e
 
+    step_end_seconds="$SECONDS"
+    duration_seconds=$((step_end_seconds - step_start_seconds))
+    duration_text="$(format_elapsed_time "$duration_seconds")"
+    end_timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+
+    {
+        printf '\nEnd time:   %s\n' "$end_timestamp"
+        printf 'Duration:   %s\n' "$duration_text"
+        printf 'Exit code:  %d\n' "$exit_code"
+    } >> "$step_log"
+
     {
         printf '\n===== Step %d/%d: %s =====\n' \
-            "$step_number" "$TOTAL_STEPS" "$description"
+            "$step_number" \
+            "$TOTAL_STEPS" \
+            "$description"
+        printf 'Duration: %s\n' "$duration_text"
         cat "$step_log"
     } >> "$LOG_FILE"
 
@@ -303,11 +398,15 @@ run_step() {
             "$step_number" \
             "$description" \
             "$exit_code" \
-            "$step_log"
+            "$step_log" \
+            "$duration_seconds"
         exit "$exit_code"
     fi
 
-    finish_step_success "$step_number" "$description"
+    finish_step_success \
+        "$step_number" \
+        "$description" \
+        "$duration_seconds"
 }
 
 # ================================================================
@@ -1577,9 +1676,13 @@ step_finish() {
 }
 
 main() {
+    local total_duration_seconds
+    local total_duration_text
+
     collect_configuration
     set_global_paths
     start_logging
+    INSTALL_START_SECONDS="$SECONDS"
     print_section "Installation Progress"
 
     run_step 1 "Writing identity and install options" step_write_identity
@@ -1594,9 +1697,17 @@ main() {
     run_step 10 "Validating the installation with FoamPilot doctor" step_validate_installation
     run_step 11 "Finalising installation" step_finish
 
-    echo
-    echo "Installation completed successfully."
-    echo "Full log: $LOG_FILE"
+    total_duration_seconds=$((SECONDS - INSTALL_START_SECONDS))
+    total_duration_text="$(
+        format_elapsed_time "$total_duration_seconds"
+    )"
+
+    {
+        echo
+        echo "Installation completed successfully."
+        printf 'Total duration: %s\n' "$total_duration_text"
+        printf 'Full log: %s\n' "$LOG_FILE"
+    } | tee -a "$LOG_FILE"
 }
 
 main "$@"
