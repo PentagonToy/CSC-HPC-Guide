@@ -65,14 +65,14 @@ Repository:
 https://github.com/PentagonToy/SmartSim-CSC.git
 
 Commit:
-6449e3bf93a2cf529d34b0015f11fad035b28d47
+54ca01f9582a4431bdf08242232d5f36cdeb4778
 ```
 
 These values are defined near the beginning of `smartsim-python.sh`:
 
 ```bash
 readonly SMARTSIM_CSC_REPO="https://github.com/PentagonToy/SmartSim-CSC.git"
-readonly SMARTSIM_CSC_REF="6449e3bf93a2cf529d34b0015f11fad035b28d47"
+readonly SMARTSIM_CSC_REF="54ca01f9582a4431bdf08242232d5f36cdeb4778"
 ```
 
 The checkout is stored at:
@@ -81,12 +81,19 @@ The checkout is stored at:
 $PYTHON_ROOT/src/SmartSim-CSC
 ```
 
-The installer checks out the repository in detached HEAD mode and removes untracked files with:
+The installer maintains a local installation-only branch named
+`foampilot-install`, force-resets it to the pinned SmartSim-CSC commit,
+and removes untracked files with:
 
 ```bash
-git checkout --detach --force "$SMARTSIM_CSC_REF"
+git switch \
+    --force-create foampilot-install \
+    "$SMARTSIM_CSC_REF"
 git clean -ffdx
 ```
+
+The `foampilot-install` branch is managed only by the installer and is not
+pushed to the remote repository.
 
 The SmartSim-CSC repository is the source of:
 
@@ -316,7 +323,7 @@ The Tykky post-install script performs the following actions:
 - Installs FoamPilot from the pinned SmartSim-CSC checkout
 - Optionally installs and prepares PySR/Julia
 - Clones the pinned SmartSim-CSC repository
-- Checks out the pinned commit in detached HEAD mode
+- Force-resets the local `foampilot-install` branch to the pinned commit
 - Installs the SmartSim runtime through the FoamPilot CLI
 - Restores the ordinary Python requirements
 - Runs `uv pip check`

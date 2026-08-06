@@ -23,7 +23,7 @@ set -Eeuo pipefail
 # USER CONFIGURATION
 # ================================================================
 readonly SMARTSIM_CSC_REPO="https://github.com/PentagonToy/SmartSim-CSC.git"
-readonly SMARTSIM_CSC_REF="6449e3bf93a2cf529d34b0015f11fad035b28d47"
+readonly SMARTSIM_CSC_REF="54ca01f9582a4431bdf08242232d5f36cdeb4778"
 
 readonly X64_GCC_MODULE="gcc/13.4.0"
 readonly X64_CMAKE_MODULE="cmake/3.26.5"
@@ -973,7 +973,9 @@ else
     git clone "$SMARTSIM_CSC_REPO" "$SMARTSIM_CSC_DIR"
 fi
 
-git -C "$SMARTSIM_CSC_DIR" checkout --detach --force "$SMARTSIM_CSC_REF"
+git -C "$SMARTSIM_CSC_DIR" switch \
+    --force-create foampilot-install \
+    "$SMARTSIM_CSC_REF"
 git -C "$SMARTSIM_CSC_DIR" clean -ffdx
 
 export USE_SYSTEMD=no
