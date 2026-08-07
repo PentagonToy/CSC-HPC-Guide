@@ -7,8 +7,17 @@
 #   - per-step logs and a combined installation log
 #   - failed-step log printed automatically
 #   - safe parallel compilation based on Slurm allocation or user override
+#   - package cache limited to base4SmartSim.yml and requirements.in
+#   - archive, directory, or disabled cache storage modes
 #   - optional PySR/Julia and CSC OpenFOAM module integration
 #   - Tykky environment, native SmartRedis, loader, updater, and Jupyter kernel
+#
+# Cache policy:
+#   Cached:     conda packages for base4SmartSim.yml, PyPI wheels and source
+#               distributions for requirements.in.
+#   Not cached: every version control dependency (SmartSim-CSC, FoamPilot,
+#               DataGraph), the native SmartRedis build, and the OpenFOAM
+#               integration. Those are always re-fetched and rebuilt.
 
 # shellcheck shell=bash
 
@@ -38,13 +47,18 @@ readonly OPENFOAM_MPI_MODULE="openmpi/5.0.10"
 # ================================================================
 # GLOBAL STATE
 # ================================================================
-readonly TOTAL_STEPS=11
+readonly TOTAL_STEPS=12
 CURRENT_STEP="initialisation"
 CURRENT_STEP_NUMBER=0
 CURRENT_STEP_LOG=""
 LOG_FILE=""
 STATUS_PID=""
 INSTALL_START_SECONDS=0
+
+CACHE_MODE="archive"
+CACHE_REUSE="no"
+CACHE_KEEP="yes"
+CACHE_IS_OPEN=0
 
 cleanup_status() {
     if [ -n "${STATUS_PID:-}" ]; then
@@ -56,6 +70,12 @@ cleanup_status() {
 
 cleanup() {
     cleanup_status
+
+    if [ "$CACHE_IS_OPEN" = "1" ]; then
+        CACHE_IS_OPEN=0
+        printf '\nPreserving the package cache after an interrupted run.\n'
+        smartsim_cache_close "$CACHE_KEEP" || true
+    fi
 }
 
 trap cleanup EXIT INT TERM
@@ -359,7 +379,11 @@ run_step() {
             "$step_number" \
             "$TOTAL_STEPS" \
             "$description"
-        printf 'Build jobs: %s\n\n' "$BUILD_JOBS"
+        printf 'Build jobs: %s\n' "$BUILD_JOBS"
+        printf 'Cache:      mode=%s reuse=%s keep=%s\n\n' \
+            "$CACHE_MODE" \
+            "$CACHE_REUSE" \
+            "$CACHE_KEEP"
     } >> "$step_log"
 
     start_step_status \
@@ -606,6 +630,426 @@ prompt_build_jobs() {
     export JULIA_NUM_THREADS="$JULIA_BUILD_THREADS"
 }
 
+# ================================================================
+# SHARED CACHE HELPER
+# ================================================================
+write_cache_helper() {
+    mkdir -p "$PYTHON_ROOT"
+
+    cat <<'EOF_CACHE' > "$PYTHON_ROOT/cache4SmartSim.sh"
+#!/bin/bash
+# Shared SmartSim package-cache helpers.
+#
+# The cache deliberately covers only two things:
+#   * conda packages required by base4SmartSim.yml
+#   * PyPI wheels and source distributions required by requirements.in
+#
+# Version control dependencies (SmartSim-CSC, FoamPilot, DataGraph) and every
+# compiled artefact (SmartRedis, the OpenFOAM integration) are never cached.
+#
+# Storage modes:
+#   archive    A single tar file on scratch. It is unpacked into a working
+#              directory for the build and repacked afterwards, so only one
+#              inode persists between runs. Preferred on Lustre.
+#   directory  A plain directory kept on scratch. Simplest, but it leaves
+#              O(100k) small files behind and consumes the file quota.
+#   none       No cache at all.
+#
+# shellcheck shell=bash
+
+SMARTSIM_CACHE_PAYLOAD=(pip uv conda)
+SMARTSIM_CACHE_MARKER=".smartsim-cache-marker"
+
+smartsim_cache_compressor() {
+    case "${SMARTSIM_CACHE_COMPRESS:-auto}" in
+        none)
+            printf ''
+            ;;
+        zstd)
+            printf 'zstd'
+            ;;
+        *)
+            if command -v zstd > /dev/null 2>&1; then
+                printf 'zstd'
+            fi
+            ;;
+    esac
+}
+
+smartsim_cache_size() {
+    local target="$1"
+    local size=""
+
+    if [ -e "$target" ]; then
+        size="$(du -sh "$target" 2> /dev/null | awk '{print $1}')"
+    fi
+
+    printf '%s' "${size:-unknown}"
+}
+
+smartsim_cache_configure() {
+    : "${ENV_ARCH:?ENV_ARCH is not set}"
+    : "${BASE_SCRATCH:?BASE_SCRATCH is not set}"
+
+    SMARTSIM_CACHE_MODE="${SMARTSIM_CACHE_MODE:-archive}"
+    SMARTSIM_CACHE_KEEP="${SMARTSIM_CACHE_KEEP:-yes}"
+    SMARTSIM_CACHE_COMPRESS="${SMARTSIM_CACHE_COMPRESS:-auto}"
+    SMARTSIM_CACHE_ROOT="${SMARTSIM_CACHE_ROOT:-$BASE_SCRATCH/.cache_smartsim_$ENV_ARCH}"
+
+    local archive_base="$SMARTSIM_CACHE_ROOT/pkgcache-$ENV_ARCH.tar"
+
+    if [ -f "$archive_base.zst" ]; then
+        SMARTSIM_CACHE_ARCHIVE="$archive_base.zst"
+    elif [ -f "$archive_base" ]; then
+        SMARTSIM_CACHE_ARCHIVE="$archive_base"
+    elif [ -n "$(smartsim_cache_compressor)" ]; then
+        SMARTSIM_CACHE_ARCHIVE="$archive_base.zst"
+    else
+        SMARTSIM_CACHE_ARCHIVE="$archive_base"
+    fi
+
+    case "$SMARTSIM_CACHE_MODE" in
+        directory)
+            SMARTSIM_CACHE_WORKSPACE="$SMARTSIM_CACHE_ROOT"
+            ;;
+        archive)
+            SMARTSIM_CACHE_WORKSPACE="${SMARTSIM_CACHE_WORKSPACE:-$BASE_SCRATCH/.cache_work_smartsim_$ENV_ARCH}"
+            ;;
+        none)
+            SMARTSIM_CACHE_WORKSPACE="$BASE_SCRATCH/.cache_none_smartsim_$ENV_ARCH"
+            ;;
+        *)
+            printf 'Unknown cache mode: %s\n' "$SMARTSIM_CACHE_MODE" >&2
+            return 1
+            ;;
+    esac
+
+    export SMARTSIM_CACHE_MODE SMARTSIM_CACHE_KEEP SMARTSIM_CACHE_COMPRESS
+    export SMARTSIM_CACHE_ROOT SMARTSIM_CACHE_ARCHIVE SMARTSIM_CACHE_WORKSPACE
+}
+
+smartsim_cache_present() {
+    local directory
+
+    case "$SMARTSIM_CACHE_MODE" in
+        archive)
+            [ -f "$SMARTSIM_CACHE_ARCHIVE" ]
+            ;;
+        directory)
+            for directory in "${SMARTSIM_CACHE_PAYLOAD[@]}"; do
+                if [ -d "$SMARTSIM_CACHE_WORKSPACE/$directory" ] \
+                    && [ -n "$(ls -A "$SMARTSIM_CACHE_WORKSPACE/$directory" 2> /dev/null)" ]; then
+                    return 0
+                fi
+            done
+            return 1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+smartsim_cache_location() {
+    case "$SMARTSIM_CACHE_MODE" in
+        archive) printf '%s' "$SMARTSIM_CACHE_ARCHIVE" ;;
+        directory) printf '%s' "$SMARTSIM_CACHE_WORKSPACE" ;;
+        *) printf 'disabled' ;;
+    esac
+}
+
+smartsim_cache_report() {
+    if [ "$SMARTSIM_CACHE_MODE" = "none" ]; then
+        printf 'Package cache: disabled\n'
+        return
+    fi
+
+    if smartsim_cache_present; then
+        printf 'Package cache: %s (%s)\n' \
+            "$(smartsim_cache_location)" \
+            "$(smartsim_cache_size "$(smartsim_cache_location)")"
+    else
+        printf 'Package cache: %s (not present)\n' "$(smartsim_cache_location)"
+    fi
+}
+
+smartsim_cache_remove_payload() {
+    local directory="$1"
+    local entry
+
+    for entry in "${SMARTSIM_CACHE_PAYLOAD[@]}"; do
+        rm -rf "${directory:?}/$entry"
+    done
+
+    rm -f "$directory/$SMARTSIM_CACHE_MARKER"
+    rmdir "$directory" 2> /dev/null || true
+}
+
+smartsim_cache_clear() {
+    printf 'Clearing the package cache.\n'
+
+    rm -f \
+        "$SMARTSIM_CACHE_ROOT/pkgcache-$ENV_ARCH.tar" \
+        "$SMARTSIM_CACHE_ROOT/pkgcache-$ENV_ARCH.tar.zst"
+
+    smartsim_cache_remove_payload "$SMARTSIM_CACHE_WORKSPACE"
+    smartsim_cache_remove_payload "$SMARTSIM_CACHE_ROOT"
+}
+
+# Remove every version control artefact so that it can never be reused.
+smartsim_cache_drop_vcs() {
+    local uv_cache="$SMARTSIM_CACHE_WORKSPACE/uv"
+
+    [ -d "$uv_cache" ] || return 0
+
+    rm -rf "$uv_cache"/git-v* 2> /dev/null || true
+    rm -rf "$uv_cache"/built-wheels-v*/git 2> /dev/null || true
+    rm -rf "$uv_cache"/sdists-v*/git 2> /dev/null || true
+}
+
+smartsim_cache_changed() {
+    local marker="$SMARTSIM_CACHE_WORKSPACE/$SMARTSIM_CACHE_MARKER"
+
+    [ -f "$marker" ] || return 0
+
+    [ -n "$(
+        find "$SMARTSIM_CACHE_WORKSPACE" \
+            -newer "$marker" \
+            -print -quit 2> /dev/null
+    )" ]
+}
+
+# smartsim_cache_open <purge:yes|no>
+smartsim_cache_open() {
+    local purge="${1:-no}"
+    local directory
+    local unpack_start
+    local unpack_end
+
+    case "$SMARTSIM_CACHE_MODE" in
+        none)
+            rm -rf "$SMARTSIM_CACHE_WORKSPACE"
+            printf 'Package cache disabled; using a throwaway directory.\n'
+            ;;
+        directory)
+            if [ "$purge" = "yes" ]; then
+                printf 'Discarding the existing package cache directory.\n'
+                smartsim_cache_remove_payload "$SMARTSIM_CACHE_WORKSPACE"
+            else
+                printf 'Reusing the package cache directory: %s (%s)\n' \
+                    "$SMARTSIM_CACHE_WORKSPACE" \
+                    "$(smartsim_cache_size "$SMARTSIM_CACHE_WORKSPACE")"
+            fi
+            ;;
+        archive)
+            rm -rf "$SMARTSIM_CACHE_WORKSPACE"
+
+            if [ "$purge" = "yes" ]; then
+                printf 'Discarding the existing package cache archive.\n'
+                rm -f \
+                    "$SMARTSIM_CACHE_ROOT/pkgcache-$ENV_ARCH.tar" \
+                    "$SMARTSIM_CACHE_ROOT/pkgcache-$ENV_ARCH.tar.zst"
+            fi
+
+            mkdir -p "$SMARTSIM_CACHE_WORKSPACE"
+
+            if [ -f "$SMARTSIM_CACHE_ARCHIVE" ]; then
+                printf 'Unpacking the package cache: %s (%s)\n' \
+                    "$SMARTSIM_CACHE_ARCHIVE" \
+                    "$(smartsim_cache_size "$SMARTSIM_CACHE_ARCHIVE")"
+
+                unpack_start="$SECONDS"
+
+                if [[ "$SMARTSIM_CACHE_ARCHIVE" == *.zst ]]; then
+                    zstd -dc "$SMARTSIM_CACHE_ARCHIVE" \
+                        | tar -x -C "$SMARTSIM_CACHE_WORKSPACE" -f -
+                else
+                    tar -x -C "$SMARTSIM_CACHE_WORKSPACE" \
+                        -f "$SMARTSIM_CACHE_ARCHIVE"
+                fi
+
+                unpack_end="$SECONDS"
+                printf 'Unpacked in %d s.\n' \
+                    "$((unpack_end - unpack_start))"
+            fi
+            ;;
+    esac
+
+    for directory in "${SMARTSIM_CACHE_PAYLOAD[@]}"; do
+        mkdir -p "$SMARTSIM_CACHE_WORKSPACE/$directory"
+    done
+
+    touch "$SMARTSIM_CACHE_WORKSPACE/$SMARTSIM_CACHE_MARKER"
+
+    export PIP_CACHE_DIR="$SMARTSIM_CACHE_WORKSPACE/pip"
+    export UV_CACHE_DIR="$SMARTSIM_CACHE_WORKSPACE/uv"
+
+    if [ "${SMARTSIM_CACHE_CONDA:-yes}" = "yes" ]; then
+        export CONDA_PKGS_DIRS="$SMARTSIM_CACHE_WORKSPACE/conda"
+    fi
+
+    printf 'pip cache:   %s\n' "$PIP_CACHE_DIR"
+    printf 'uv cache:    %s\n' "$UV_CACHE_DIR"
+    printf 'conda cache: %s\n' "${CONDA_PKGS_DIRS:-not managed}"
+}
+
+# smartsim_cache_close <keep:yes|no>
+smartsim_cache_close() {
+    local keep="${1:-yes}"
+    local compressor
+    local temporary_archive
+    local pack_start
+    local pack_end
+
+    smartsim_cache_drop_vcs
+
+    case "$SMARTSIM_CACHE_MODE" in
+        none)
+            rm -rf "$SMARTSIM_CACHE_WORKSPACE"
+            return 0
+            ;;
+        directory)
+            if [ "$keep" = "yes" ]; then
+                printf 'Package cache kept: %s (%s)\n' \
+                    "$SMARTSIM_CACHE_WORKSPACE" \
+                    "$(smartsim_cache_size "$SMARTSIM_CACHE_WORKSPACE")"
+            else
+                printf 'Removing the package cache directory.\n'
+                smartsim_cache_remove_payload "$SMARTSIM_CACHE_WORKSPACE"
+            fi
+            return 0
+            ;;
+    esac
+
+    if [ "$keep" != "yes" ]; then
+        printf 'Removing the package cache archive and workspace.\n'
+        rm -f \
+            "$SMARTSIM_CACHE_ROOT/pkgcache-$ENV_ARCH.tar" \
+            "$SMARTSIM_CACHE_ROOT/pkgcache-$ENV_ARCH.tar.zst"
+        rm -rf "$SMARTSIM_CACHE_WORKSPACE"
+        return 0
+    fi
+
+    if [ -f "$SMARTSIM_CACHE_ARCHIVE" ] && ! smartsim_cache_changed; then
+        printf 'Package cache unchanged; keeping %s\n' \
+            "$SMARTSIM_CACHE_ARCHIVE"
+        rm -rf "$SMARTSIM_CACHE_WORKSPACE"
+        return 0
+    fi
+
+    mkdir -p "$SMARTSIM_CACHE_ROOT"
+
+    compressor="$(smartsim_cache_compressor)"
+    temporary_archive="$SMARTSIM_CACHE_ARCHIVE.$$.partial"
+
+    printf 'Packing the package cache into %s\n' "$SMARTSIM_CACHE_ARCHIVE"
+    pack_start="$SECONDS"
+
+    rm -f "$SMARTSIM_CACHE_WORKSPACE/$SMARTSIM_CACHE_MARKER"
+
+    if [ -n "$compressor" ] && [[ "$SMARTSIM_CACHE_ARCHIVE" == *.zst ]]; then
+        # Wheels are already compressed, so level 1 is the sensible trade-off.
+        tar -c -C "$SMARTSIM_CACHE_WORKSPACE" -f - "${SMARTSIM_CACHE_PAYLOAD[@]}" \
+            | zstd -1 -T"${BUILD_JOBS:-1}" -q -o "$temporary_archive" -f
+    else
+        tar -c -C "$SMARTSIM_CACHE_WORKSPACE" \
+            -f "$temporary_archive" "${SMARTSIM_CACHE_PAYLOAD[@]}"
+    fi
+
+    mv -f "$temporary_archive" "$SMARTSIM_CACHE_ARCHIVE"
+
+    pack_end="$SECONDS"
+
+    printf 'Packed in %d s: %s (%s)\n' \
+        "$((pack_end - pack_start))" \
+        "$SMARTSIM_CACHE_ARCHIVE" \
+        "$(smartsim_cache_size "$SMARTSIM_CACHE_ARCHIVE")"
+
+    rm -rf "$SMARTSIM_CACHE_WORKSPACE"
+    printf 'Workspace removed; a single file remains on scratch.\n'
+}
+EOF_CACHE
+
+    chmod +x "$PYTHON_ROOT/cache4SmartSim.sh"
+}
+
+load_cache_helper() {
+    write_cache_helper
+
+    # shellcheck disable=SC1090
+    source "$PYTHON_ROOT/cache4SmartSim.sh"
+}
+
+prompt_cache_mode() {
+    local value
+
+    echo "The cache stores only the reproducible download artefacts:"
+    echo "  * conda packages listed in base4SmartSim.yml"
+    echo "  * PyPI wheels and source distributions listed in requirements.in"
+    echo
+    echo "It never stores GitHub sources or compiled output. SmartSim-CSC,"
+    echo "FoamPilot, DataGraph, SmartRedis, and the OpenFOAM integration are"
+    echo "re-fetched and rebuilt on every run."
+    echo
+    echo "Storage mode:"
+    echo "  1) archive    one tar file on scratch, unpacked only during builds"
+    echo "                (best for Lustre metadata load and file quota)"
+    echo "  2) directory  a plain directory left on scratch"
+    echo "                (simplest, but leaves O(100k) small files behind)"
+    echo "  3) none       no cache at all"
+
+    while true; do
+        read -r -p "Cache mode [1]: " value
+        value="$(printf '%s' "${value:-1}" | tr '[:upper:]' '[:lower:]' | xargs)"
+
+        case "$value" in
+            1|archive) CACHE_MODE="archive"; return ;;
+            2|directory|dir) CACHE_MODE="directory"; return ;;
+            3|none|no) CACHE_MODE="none"; return ;;
+            *) echo "Choose 1, 2, or 3." ;;
+        esac
+    done
+}
+
+prompt_cache_policy() {
+    load_cache_helper
+
+    prompt_cache_mode
+
+    SMARTSIM_CACHE_MODE="$CACHE_MODE"
+    smartsim_cache_configure
+
+    if [ "$CACHE_MODE" = "none" ]; then
+        CACHE_REUSE="no"
+        CACHE_KEEP="no"
+        CACHE_PURGE="yes"
+        echo
+        echo "Caching disabled: every package will be downloaded again."
+        return
+    fi
+
+    echo
+    smartsim_cache_report
+
+    if smartsim_cache_present; then
+        prompt_yes_no \
+            "Reuse this cache to speed up the installation? [Y/n]: " \
+            "yes" CACHE_REUSE
+    else
+        CACHE_REUSE="no"
+    fi
+
+    if [ "$CACHE_REUSE" = "yes" ]; then
+        CACHE_PURGE="no"
+    else
+        CACHE_PURGE="yes"
+    fi
+
+    prompt_yes_no \
+        "Keep the cache after the installation finishes? [Y/n]: " \
+        "yes" CACHE_KEEP
+}
+
 collect_configuration() {
     echo "=================================================================="
     echo " Unified ML + SmartSim Environment Installer (Roihu only)"
@@ -653,6 +1097,11 @@ collect_configuration() {
     fi
 
     echo
+    echo "--- Package cache ---"
+    set_base_paths
+    prompt_cache_policy
+
+    echo
     echo "--- Parallel build ---"
     prompt_build_jobs
 
@@ -668,6 +1117,10 @@ collect_configuration() {
         "OpenFOAM" "$BUILD_OPENFOAM" \
         "OpenFOAM version" "${OPENFOAM_VERSION:+v$OPENFOAM_VERSION}" \
         "OpenFOAM module" "$OPENFOAM_MODULE" \
+        "Cache mode" "$CACHE_MODE" \
+        "Cache location" "$(smartsim_cache_location)" \
+        "Reuse cache" "$CACHE_REUSE" \
+        "Keep cache" "$CACHE_KEEP" \
         "Parallel build jobs" "$BUILD_JOBS" \
         "Julia build threads" "$JULIA_BUILD_THREADS" \
         "SmartSim-CSC ref" "$SMARTSIM_CSC_REF"
@@ -680,10 +1133,17 @@ collect_configuration() {
     esac
 }
 
-set_global_paths() {
+set_base_paths() {
     export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
     export PYTHON_BASE="$BASE_SCRATCH/Python"
     export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
+
+    mkdir -p "$PYTHON_ROOT"
+}
+
+set_global_paths() {
+    set_base_paths
+
     export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
     export SMARTSIM_CSC_REPO SMARTSIM_CSC_REF
     export SMARTSIM_CSC_DIR="$PYTHON_ROOT/src/SmartSim-CSC"
@@ -700,6 +1160,21 @@ set_global_paths() {
 # ================================================================
 # INSTALLATION STEPS
 # ================================================================
+step_prepare_cache() {
+    load_cache_helper
+
+    SMARTSIM_CACHE_MODE="$CACHE_MODE"
+    SMARTSIM_CACHE_KEEP="$CACHE_KEEP"
+    smartsim_cache_configure
+
+    smartsim_cache_open "$CACHE_PURGE"
+    CACHE_IS_OPEN=1
+
+    printf '\nCached:     conda packages (base4SmartSim.yml)\n'
+    printf '            PyPI wheels and sdists (requirements.in)\n'
+    printf 'Not cached: SmartSim-CSC, FoamPilot, DataGraph, SmartRedis, OpenFOAM\n'
+}
+
 step_write_identity() {
     mkdir -p "$HOME/.config/csc-hpc"
 
@@ -713,6 +1188,10 @@ EOF_IDENTITY
 
     cat <<EOF_OPTIONS > "$PYTHON_ROOT/install-options-$ENV_ARCH.sh"
 export INSTALL_PYSR="$INSTALL_PYSR"
+export SMARTSIM_CACHE_MODE="$CACHE_MODE"
+export SMARTSIM_CACHE_KEEP="$CACHE_KEEP"
+export SMARTSIM_CACHE_ROOT="$SMARTSIM_CACHE_ROOT"
+export SMARTSIM_CACHE_COMPRESS="$SMARTSIM_CACHE_COMPRESS"
 EOF_OPTIONS
     chmod 600 "$PYTHON_ROOT/install-options-$ENV_ARCH.sh"
 }
@@ -874,7 +1353,75 @@ julia
 EOF_PYSR
     fi
 
+    create_vcs_helper
     create_extra_install_script
+}
+
+# Shared snippet used by both post-install scripts to keep VCS packages fresh.
+create_vcs_helper() {
+    cat <<'EOF_VCS' > "$PYTHON_ROOT/vcs4SmartSim.sh"
+#!/bin/bash
+# Detects version control requirements so that they are always re-fetched.
+# shellcheck shell=bash
+
+collect_vcs_packages() {
+    local requirements_file="$1"
+    local line
+    local trimmed
+    local name
+
+    VCS_PACKAGES=()
+    VCS_REFRESH_ARGS=()
+
+    [ -f "$requirements_file" ] || return 0
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        trimmed="${line#"${line%%[![:space:]]*}"}"
+
+        case "$trimmed" in
+            ''|'#'*) continue ;;
+        esac
+
+        case "$trimmed" in
+            *" @ git+"*|*" @ hg+"*|*" @ svn+"*|*" @ bzr+"*)
+                name="${trimmed%% @ *}"
+                name="$(
+                    printf '%s' "$name" \
+                        | tr '[:upper:]_.' '[:lower:]--' \
+                        | xargs
+                )"
+                VCS_PACKAGES+=("$name")
+                ;;
+        esac
+    done < "$requirements_file"
+
+    local package
+
+    for package in "${VCS_PACKAGES[@]}"; do
+        VCS_REFRESH_ARGS+=(
+            "--refresh-package" "$package"
+            "--reinstall-package" "$package"
+        )
+    done
+
+    if [ "${#VCS_PACKAGES[@]}" -gt 0 ]; then
+        printf 'Version control requirements forced fresh: %s\n' \
+            "${VCS_PACKAGES[*]}"
+    fi
+}
+
+drop_vcs_cache_entries() {
+    local package
+
+    command -v uv > /dev/null 2>&1 || return 0
+
+    for package in "$@"; do
+        uv cache clean "$package" > /dev/null 2>&1 || true
+    done
+}
+EOF_VCS
+
+    chmod +x "$PYTHON_ROOT/vcs4SmartSim.sh"
 }
 
 create_extra_install_script() {
@@ -893,9 +1440,12 @@ set -Eeuo pipefail
 : "${BUILD_JOBS:=1}"
 : "${JULIA_BUILD_THREADS:=1}"
 
+# The cache lifecycle is owned by the installer; never delete it from here.
+: "${PIP_CACHE_DIR:=$CW_BUILD_TMPDIR/.pip_cache}"
+: "${UV_CACHE_DIR:=$CW_BUILD_TMPDIR/.uv_cache}"
+
 export TMPDIR="$CW_BUILD_TMPDIR"
-export PIP_CACHE_DIR="$CW_BUILD_TMPDIR/.pip_cache"
-export UV_CACHE_DIR="$CW_BUILD_TMPDIR/.uv_cache"
+export PIP_CACHE_DIR UV_CACHE_DIR
 export UV_LINK_MODE=copy
 export UV_CONCURRENT_DOWNLOADS=8
 export UV_NO_PROGRESS=1
@@ -908,14 +1458,26 @@ export JULIA_NUM_THREADS="$JULIA_BUILD_THREADS"
 
 mkdir -p "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
 
-python -m pip install --progress-bar off --no-cache-dir uv
+echo "pip cache: $PIP_CACHE_DIR"
+echo "uv cache:  $UV_CACHE_DIR"
 
+# shellcheck disable=SC1091
+source "$PYTHON_ROOT/vcs4SmartSim.sh"
+collect_vcs_packages "$PYTHON_ROOT/requirements.in"
+
+python -m pip install --progress-bar off uv
+
+# Cached: everything from PyPI. Forced fresh: every git requirement.
 uv pip install \
     --link-mode=copy \
+    "${VCS_REFRESH_ARGS[@]}" \
     --requirements "$PYTHON_ROOT/requirements.in"
 
+# FoamPilot always comes straight from GitHub, never from the cache.
 uv pip install \
+    --no-cache \
     --link-mode=copy \
+    --reinstall-package foampilot \
     --no-deps \
     "git+${SMARTSIM_CSC_REPO}@${SMARTSIM_CSC_REF}#subdirectory=components/foampilot"
 
@@ -991,6 +1553,7 @@ CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS" \
         --python "$(command -v python)" \
         --smart "$(dirname "$(command -v python)")/smart"
 
+# Consistency pass; the git requirements are already at the pinned revisions.
 uv pip install \
     --link-mode=copy \
     --requirements "$PYTHON_ROOT/requirements.in"
@@ -1028,7 +1591,8 @@ else
         > "$PYTHON_ROOT/julia-environment-$ENV_ARCH.txt"
 fi
 
-rm -rf "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
+# Keep version control artefacts out of the persistent cache.
+drop_vcs_cache_entries foampilot "${VCS_PACKAGES[@]}"
 EOF_EXTRA
 
     chmod +x "$PYTHON_ROOT/extra4SmartSim.sh"
@@ -1047,7 +1611,9 @@ step_build_tykky() {
     export CW_BUILD_TMPDIR="$TMP_BUILD_DIR"
     export INSTALL_PYSR BUILD_JOBS JULIA_BUILD_THREADS
     export SMARTSIM_CSC_REPO SMARTSIM_CSC_REF SMARTSIM_CSC_DIR SMARTSIM_CSC_PROFILE
+    export PIP_CACHE_DIR UV_CACHE_DIR
 
+    # The temporary build directory is disposable; the cache lives elsewhere.
     rm -rf "$ENV_PREFIX" "$TMP_BUILD_DIR"
     mkdir -p "$TMP_BUILD_DIR"
 
@@ -1113,6 +1679,7 @@ export SMARTSIM_BUILD_JOBS="$BUILD_JOBS"
 EOF_RUNTIME
     chmod 600 "$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
 
+    # Always rebuilt: the sources come from the SmartSim-CSC checkout.
     "$ENV_PREFIX/bin/python" -m foampilot.cli install smartredis \
         --repository-root "$SMARTSIM_CSC_DIR" \
         --smartredis-dir "$SMARTREDIS_DIR" \
@@ -1133,7 +1700,6 @@ step_verify_native_smartredis() {
     LD_LIBRARY_PATH="$SMARTREDIS_DIR/install/$lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
         ldd "$SMARTREDIS_DIR/install/$lib_dir/libsmartredis-fortran.so"
 }
-
 
 step_build_openfoam() {
     if [ "$BUILD_OPENFOAM" != "yes" ]; then
@@ -1163,6 +1729,7 @@ step_build_openfoam() {
     export FOAM_USER_LIBBIN="$OPENFOAM_USER_DIR/platforms/$WM_OPTIONS/lib"
     export WM_NCOMPPROCS="$BUILD_JOBS"
 
+    # Always rebuilt: the sources come from the SmartSim-CSC checkout.
     rm -rf "$OPENFOAM_USER_DIR"
 
     "$ENV_PREFIX/bin/python" -m foampilot.cli install openfoam \
@@ -1359,9 +1926,12 @@ set -Eeuo pipefail
 : "${BUILD_JOBS:=1}"
 : "${JULIA_BUILD_THREADS:=1}"
 
+# The cache lifecycle is owned by smartsim-update; never delete it from here.
+: "${PIP_CACHE_DIR:=$CW_BUILD_TMPDIR/.pip_cache}"
+: "${UV_CACHE_DIR:=$CW_BUILD_TMPDIR/.uv_cache}"
+
 export TMPDIR="$CW_BUILD_TMPDIR"
-export PIP_CACHE_DIR="$CW_BUILD_TMPDIR/.pip_cache"
-export UV_CACHE_DIR="$CW_BUILD_TMPDIR/.uv_cache"
+export PIP_CACHE_DIR UV_CACHE_DIR
 export UV_LINK_MODE=copy
 export UV_CONCURRENT_DOWNLOADS=8
 export UV_NO_PROGRESS=1
@@ -1374,10 +1944,18 @@ export JULIA_NUM_THREADS="$JULIA_BUILD_THREADS"
 
 mkdir -p "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
 
-python -m pip install --progress-bar off --no-cache-dir uv
+echo "pip cache: $PIP_CACHE_DIR"
+echo "uv cache:  $UV_CACHE_DIR"
+
+# shellcheck disable=SC1091
+source "$PYTHON_ROOT/vcs4SmartSim.sh"
+collect_vcs_packages "$PYTHON_ROOT/requirements.in"
+
+python -m pip install --progress-bar off uv
 
 uv pip install \
     --link-mode=copy \
+    "${VCS_REFRESH_ARGS[@]}" \
     --requirements "$PYTHON_ROOT/requirements.in"
 
 UPDATE_REQUEST="$PYTHON_ROOT/.smartsim-update-$ENV_ARCH.txt"
@@ -1432,7 +2010,8 @@ python -m pip list --format=freeze \
     > "$PYTHON_ROOT/requirements-$ENV_ARCH.txt"
 
 rm -f "$UPDATE_REQUEST"
-rm -rf "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
+
+drop_vcs_cache_entries foampilot "${VCS_PACKAGES[@]}"
 EOF_UPDATE_POST
 
     chmod +x "$PYTHON_ROOT/update4SmartSim.sh"
@@ -1445,10 +2024,38 @@ create_smartsim_update_command() {
 #!/bin/bash -l
 set -Eeuo pipefail
 
-if [ "$#" -eq 0 ]; then
-    echo "Usage: smartsim-update <package> [package ...]"
-    exit 1
-fi
+print_usage() {
+    cat <<'EOF_USAGE'
+Usage:
+  smartsim-update <package> [package ...]  Update packages in the environment
+  smartsim-update --cache-info             Show the package cache location and size
+  smartsim-update --clear-cache            Delete the package cache
+  smartsim-update --fresh <package>        Ignore the cache for this run
+  smartsim-update --no-keep-cache <pkg>    Delete the cache after this run
+
+Only conda packages and PyPI wheels are cached. GitHub requirements are
+always re-fetched and rebuilt.
+EOF_USAGE
+}
+
+CLEAR_CACHE="no"
+SHOW_CACHE_INFO="no"
+FRESH_CACHE="no"
+KEEP_OVERRIDE=""
+PACKAGES=()
+
+for argument in "$@"; do
+    case "$argument" in
+        -h|--help) print_usage; exit 0 ;;
+        --cache-info) SHOW_CACHE_INFO="yes" ;;
+        --clear-cache) CLEAR_CACHE="yes" ;;
+        --fresh) FRESH_CACHE="yes" ;;
+        --keep-cache) KEEP_OVERRIDE="yes" ;;
+        --no-keep-cache) KEEP_OVERRIDE="no" ;;
+        -*) echo "Unknown option: $argument"; print_usage; exit 1 ;;
+        *) PACKAGES+=("$argument") ;;
+    esac
+done
 
 source "$HOME/.config/csc-hpc/identity.sh"
 
@@ -1470,6 +2077,32 @@ if [ -f "$PYTHON_ROOT/install-options-$ENV_ARCH.sh" ]; then
     source "$PYTHON_ROOT/install-options-$ENV_ARCH.sh"
 fi
 export INSTALL_PYSR="${INSTALL_PYSR:-yes}"
+
+# shellcheck disable=SC1091
+source "$PYTHON_ROOT/cache4SmartSim.sh"
+
+if [ -n "$KEEP_OVERRIDE" ]; then
+    SMARTSIM_CACHE_KEEP="$KEEP_OVERRIDE"
+fi
+
+smartsim_cache_configure
+
+if [ "$SHOW_CACHE_INFO" = "yes" ]; then
+    smartsim_cache_report
+fi
+
+if [ "$CLEAR_CACHE" = "yes" ]; then
+    smartsim_cache_clear
+fi
+
+if [ "${#PACKAGES[@]}" -eq 0 ]; then
+    if [ "$CLEAR_CACHE" = "yes" ] || [ "$SHOW_CACHE_INFO" = "yes" ]; then
+        exit 0
+    fi
+
+    print_usage
+    exit 1
+fi
 
 if [ -f "$PYTHON_ROOT/runtime-$ENV_ARCH.sh" ]; then
     source "$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
@@ -1499,7 +2132,7 @@ if [ "$JULIA_BUILD_THREADS" -gt 8 ]; then
 fi
 export BUILD_JOBS JULIA_BUILD_THREADS
 
-for package in "$@"; do
+for package in "${PACKAGES[@]}"; do
     package_name="$(
         printf '%s\n' "$package" \
             | sed -E 's/\[.*//; s/[<>=!~].*//' \
@@ -1520,9 +2153,9 @@ for package in "$@"; do
     esac
 done
 
-printf '%s\n' "$@" > "$UPDATE_REQUEST"
+printf '%s\n' "${PACKAGES[@]}" > "$UPDATE_REQUEST"
 
-python - "$PYTHON_ROOT/requirements.in" "$@" <<'PY'
+python - "$PYTHON_ROOT/requirements.in" "${PACKAGES[@]}" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -1559,6 +2192,20 @@ for spec in requested:
 
 requirements_file.write_text("\n".join(lines) + "\n")
 PY
+
+CACHE_OPEN=0
+
+close_cache() {
+    if [ "$CACHE_OPEN" = "1" ]; then
+        CACHE_OPEN=0
+        smartsim_cache_close "$SMARTSIM_CACHE_KEEP" || true
+    fi
+}
+
+trap close_cache EXIT INT TERM
+
+smartsim_cache_open "$FRESH_CACHE"
+CACHE_OPEN=1
 
 module purge
 module load tykky
@@ -1597,6 +2244,8 @@ PY
 
     mkdir -p "$JULIA_DEPOT_RUNTIME"
 fi
+
+close_cache
 
 echo "Update completed."
 echo "Recorded packages: $PYTHON_ROOT/requirements-$ENV_ARCH.txt"
@@ -1668,12 +2317,21 @@ PY
 }
 
 step_finish() {
+    if [ "$CACHE_IS_OPEN" = "1" ]; then
+        CACHE_IS_OPEN=0
+        smartsim_cache_close "$CACHE_KEEP"
+    fi
+
+    printf '\n'
     printf 'Load with: source "%s"\n' "$BASE_SCRATCH/Python4SmartSim.sh"
     printf 'Update packages with: smartsim-update <package>\n'
+    printf 'Inspect the cache with: smartsim-update --cache-info\n'
     printf 'SmartSim-CSC ref: %s\n' "$SMARTSIM_CSC_REF"
+
     if [ "$BUILD_OPENFOAM" = "yes" ]; then
         printf 'OpenFOAM module: %s\n' "$OPENFOAM_MODULE"
     fi
+
     printf 'Parallel build jobs: %s\n' "$BUILD_JOBS"
 }
 
@@ -1687,17 +2345,18 @@ main() {
     INSTALL_START_SECONDS="$SECONDS"
     print_section "Installation Progress"
 
-    run_step 1 "Writing identity and install options" step_write_identity
-    run_step 2 "Creating configuration and build scripts" step_create_configuration
-    run_step 3 "Building the Tykky Python environment" step_build_tykky
-    run_step 4 "Preparing the writable Julia runtime" step_prepare_julia_runtime
-    run_step 5 "Installing native SmartRedis through FoamPilot" step_build_native_smartredis
-    run_step 6 "Verifying native SmartRedis" step_verify_native_smartredis
-    run_step 7 "Installing the OpenFOAM integration through FoamPilot" step_build_openfoam
-    run_step 8 "Creating loader and update tooling" step_create_loader
-    run_step 9 "Registering the Jupyter kernel" step_register_jupyter_kernel
-    run_step 10 "Validating the installation with FoamPilot doctor" step_validate_installation
-    run_step 11 "Finalising installation" step_finish
+    run_step 1 "Preparing the package cache" step_prepare_cache
+    run_step 2 "Writing identity and install options" step_write_identity
+    run_step 3 "Creating configuration and build scripts" step_create_configuration
+    run_step 4 "Building the Tykky Python environment" step_build_tykky
+    run_step 5 "Preparing the writable Julia runtime" step_prepare_julia_runtime
+    run_step 6 "Installing native SmartRedis through FoamPilot" step_build_native_smartredis
+    run_step 7 "Verifying native SmartRedis" step_verify_native_smartredis
+    run_step 8 "Installing the OpenFOAM integration through FoamPilot" step_build_openfoam
+    run_step 9 "Creating loader and update tooling" step_create_loader
+    run_step 10 "Registering the Jupyter kernel" step_register_jupyter_kernel
+    run_step 11 "Validating the installation with FoamPilot doctor" step_validate_installation
+    run_step 12 "Finalising and packing the package cache" step_finish
 
     total_duration_seconds=$((SECONDS - INSTALL_START_SECONDS))
     total_duration_text="$(
