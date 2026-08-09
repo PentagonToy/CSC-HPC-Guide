@@ -46,7 +46,7 @@ The CSC username appears in only one place. If you later use a different CSC acc
 
 ---
 
-## 3. Add the CSC SSH Certificate Command
+## 3. Add the CSC SSH Certificate Management Command
 
 Append the following function to `~/.zshrc`:
 
@@ -279,13 +279,13 @@ Using the current certification.
 
 ## 5. Normal Usage
 
-For normal use, simply run:
+For normal use, run:
 
 ```bash
 csc-ssh-keys
 ```
 
-before connecting to CSC.
+whenever you want to check or renew your CSC SSH certificate.
 
 The command handles the certificate state automatically:
 
@@ -297,8 +297,8 @@ Certificate expired
     -> Generate a new certificate
 
 Certificate still valid
-    -> Show remaining validity
-    -> Choose whether to renew or keep it
+    -> Show the expiration time and remaining validity
+    -> Choose whether to renew it or keep the current certificate
 ```
 
 You normally do not need to run `csc_cert.py` directly after completing this setup.
