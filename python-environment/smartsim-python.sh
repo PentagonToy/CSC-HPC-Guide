@@ -1630,11 +1630,17 @@ step_build_tykky() {
     )"
     tykky_config="$TMP_BUILD_DIR/tykky-config.yaml"
 
-    cp         "$tykky_root/default_config/config.yaml"         "$tykky_config"
+    cp \
+        "$tykky_root/default_config/config.yaml" \
+        "$tykky_config"
 
-    sed -i         "s/^    conda_version: .*/    conda_version: $TYKKY_MINIFORGE_VERSION/"         "$tykky_config"
+    sed -i \
+        "s/^    conda_version: .*/    conda_version: $TYKKY_MINIFORGE_VERSION/" \
+        "$tykky_config"
 
-    grep -qx         "    conda_version: $TYKKY_MINIFORGE_VERSION"         "$tykky_config"
+    grep -qx \
+        "    conda_version: $TYKKY_MINIFORGE_VERSION" \
+        "$tykky_config"
 
     export CW_GLOBAL_YAML="$tykky_config"
 
