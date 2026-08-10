@@ -33,6 +33,7 @@ set -Eeuo pipefail
 # ================================================================
 readonly SMARTSIM_CSC_REPO="https://github.com/PentagonToy/SmartSim-CSC.git"
 readonly SMARTSIM_CSC_REF="3a769d228b38391a042029f6ee6564fe4f28a1ea"
+readonly TYKKY_MINIFORGE_VERSION="26.3.2-2"
 
 readonly X64_GCC_MODULE="gcc/13.4.0"
 readonly X64_CMAKE_MODULE="cmake/3.26.5"
@@ -1123,6 +1124,7 @@ collect_configuration() {
         "Keep cache" "$CACHE_KEEP" \
         "Parallel build jobs" "$BUILD_JOBS" \
         "Julia build threads" "$JULIA_BUILD_THREADS" \
+        "Tykky Miniforge" "$TYKKY_MINIFORGE_VERSION" \
         "SmartSim-CSC ref" "$SMARTSIM_CSC_REF"
     echo
 
@@ -1606,6 +1608,8 @@ step_build_tykky() {
     if [ -n "$CUDA_MODULE" ]; then
         module load "$CUDA_MODULE"
     fi
+
+    export CW_CONDA_VERSION="$TYKKY_MINIFORGE_VERSION"
 
     export TMPDIR="$TMP_BUILD_DIR"
     export CW_BUILD_TMPDIR="$TMP_BUILD_DIR"
