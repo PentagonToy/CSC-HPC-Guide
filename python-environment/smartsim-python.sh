@@ -1609,6 +1609,8 @@ step_build_tykky() {
         module load "$CUDA_MODULE"
     fi
 
+    unset PYTHONPATH
+
     export TMPDIR="$TMP_BUILD_DIR"
     export CW_BUILD_TMPDIR="$TMP_BUILD_DIR"
     export INSTALL_PYSR BUILD_JOBS JULIA_BUILD_THREADS
