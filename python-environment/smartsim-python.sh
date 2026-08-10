@@ -1609,8 +1609,6 @@ step_build_tykky() {
         module load "$CUDA_MODULE"
     fi
 
-    export CW_CONDA_VERSION="$TYKKY_MINIFORGE_VERSION"
-
     export TMPDIR="$TMP_BUILD_DIR"
     export CW_BUILD_TMPDIR="$TMP_BUILD_DIR"
     export INSTALL_PYSR BUILD_JOBS JULIA_BUILD_THREADS
@@ -1620,6 +1618,23 @@ step_build_tykky() {
     # The temporary build directory is disposable; the cache lives elsewhere.
     rm -rf "$ENV_PREFIX" "$TMP_BUILD_DIR"
     mkdir -p "$TMP_BUILD_DIR"
+
+    local tykky_root
+    local tykky_config
+
+    tykky_root="$(
+        cd "$(dirname "$(command -v conda-containerize)")/.."
+        pwd
+    )"
+    tykky_config="$TMP_BUILD_DIR/tykky-config.yaml"
+
+    cp         "$tykky_root/default_config/config.yaml"         "$tykky_config"
+
+    sed -i         "s/^    conda_version: .*/    conda_version: $TYKKY_MINIFORGE_VERSION/"         "$tykky_config"
+
+    grep -qx         "    conda_version: $TYKKY_MINIFORGE_VERSION"         "$tykky_config"
+
+    export CW_GLOBAL_YAML="$tykky_config"
 
     conda-containerize new \
         --prefix "$ENV_PREFIX" \
