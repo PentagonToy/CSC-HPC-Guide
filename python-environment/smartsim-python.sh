@@ -1688,9 +1688,17 @@ PY
 }
 
 step_build_native_smartredis() {
+    local smartredis_cc
+    local smartredis_cxx
+    local smartredis_fc
+
     module purge
     module load "$GCC_MODULE"
     module load "$CMAKE_MODULE"
+
+    smartredis_cc="$(command -v gcc)"
+    smartredis_cxx="$(command -v g++)"
+    smartredis_fc="$(command -v gfortran)"
 
     cat <<EOF_RUNTIME > "$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
 export SMARTSIM_GCC_MODULE="$GCC_MODULE"
@@ -1707,14 +1715,19 @@ EOF_RUNTIME
     chmod 600 "$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
 
     # Always rebuilt: the sources come from the SmartSim-CSC checkout.
-    "$ENV_PREFIX/bin/python" -m foampilot.cli install smartredis \
-        --repository-root "$SMARTSIM_CSC_DIR" \
-        --smartredis-dir "$SMARTREDIS_DIR" \
-        --build-jobs "$BUILD_JOBS"
+    SMARTREDIS_CC="$smartredis_cc" \
+    SMARTREDIS_CXX="$smartredis_cxx" \
+    SMARTREDIS_FC="$smartredis_fc" \
+        "$ENV_PREFIX/bin/python" -m foampilot.cli install smartredis \
+            --repository-root "$SMARTSIM_CSC_DIR" \
+            --smartredis-dir "$SMARTREDIS_DIR" \
+            --build-jobs "$BUILD_JOBS"
 }
 
 step_verify_native_smartredis() {
     local lib_dir
+    local library
+    local output
 
     if [ -d "$SMARTREDIS_DIR/install/lib64" ]; then
         lib_dir="lib64"
@@ -1722,10 +1735,30 @@ step_verify_native_smartredis() {
         lib_dir="lib"
     fi
 
-    test -f "$SMARTREDIS_DIR/install/$lib_dir/libsmartredis-fortran.so"
+    for library in \
+        "$SMARTREDIS_DIR/install/$lib_dir/libsmartredis.so" \
+        "$SMARTREDIS_DIR/install/$lib_dir/libsmartredis-fortran.so"
+    do
+        if [ ! -f "$library" ]; then
+            echo "Missing native SmartRedis library: $library" >&2
+            return 1
+        fi
 
-    LD_LIBRARY_PATH="$SMARTREDIS_DIR/install/$lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-        ldd "$SMARTREDIS_DIR/install/$lib_dir/libsmartredis-fortran.so"
+        if ! output="$(
+            LD_LIBRARY_PATH="$SMARTREDIS_DIR/install/$lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+                ldd "$library" 2>&1
+        )"; then
+            printf '%s\n' "$output" >&2
+            return 1
+        fi
+
+        printf '%s\n' "$output"
+
+        if grep -F 'not found' <<< "$output" >/dev/null; then
+            echo "Native SmartRedis dependency verification failed: $library" >&2
+            return 1
+        fi
+    done
 }
 
 step_build_openfoam() {
