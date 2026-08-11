@@ -65,14 +65,14 @@ Repository:
 https://github.com/PentagonToy/SmartSim-CSC.git
 
 Commit:
-3a769d228b38391a042029f6ee6564fe4f28a1ea
+da12dac83cfca6742ab66140063e9eac78bcf4e2
 ```
 
 These values are defined near the beginning of `smartsim-python.sh`:
 
 ```bash
 readonly SMARTSIM_CSC_REPO="https://github.com/PentagonToy/SmartSim-CSC.git"
-readonly SMARTSIM_CSC_REF="3a769d228b38391a042029f6ee6564fe4f28a1ea"
+readonly SMARTSIM_CSC_REF="da12dac83cfca6742ab66140063e9eac78bcf4e2"
 ```
 
 The checkout is stored at:
