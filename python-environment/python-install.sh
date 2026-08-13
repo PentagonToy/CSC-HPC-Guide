@@ -1738,7 +1738,6 @@ export FOAMNORDIC_OPENFOAM_ENABLED="$BUILD_OPENFOAM"
 export FOAMNORDIC_BUILD_JOBS="$BUILD_JOBS"
 export FOAMNORDIC_PROFILE="$FOAMNORDIC_PROFILE"
 export FOAMNORDIC_RUNTIME_DIR="$FOAMNORDIC_RUNTIME_DIR"
-export FOAMNORDIC_REF="$FOAMNORDIC_REF"
 EOF_RUNTIME
     chmod 600 "$runtime_config_tmp"
     mv -f "$runtime_config_tmp" "$runtime_config"
@@ -1828,6 +1827,11 @@ print(
 PY_RUNTIME
 )"
 
+export PYTHONNOUSERSITE=1
+
+export SMARTSIM_DEP_PATH="$FOAMNORDIC_RUNTIME_DIR/$FOAMNORDIC_PROFILE"
+export SMARTSIM_DEP_INSTALL_PATH="$SMARTSIM_DEP_PATH"
+
 if [ ! -d "$SMARTREDIS_DIR/install" ]; then
     echo "SmartRedis runtime not found: $SMARTREDIS_DIR"
     return 1
@@ -1867,6 +1871,13 @@ if [ "$FOAMNORDIC_OPENFOAM_ENABLED" = "yes" ] && [ "$ENV_ARCH" = "x64" ]; then
         echo "Loaded OpenFOAM module does not match the runtime configuration."
         return 1
     fi
+
+    export FOAM_USER_DIR="$FOAMNORDIC_RUNTIME_DIR/$FOAMNORDIC_PROFILE/openfoam-user/v$FOAMNORDIC_OPENFOAM_VERSION"
+    export FOAM_USER_APPBIN="$FOAM_USER_DIR/platforms/$WM_OPTIONS/bin"
+    export FOAM_USER_LIBBIN="$FOAM_USER_DIR/platforms/$WM_OPTIONS/lib"
+
+    path_prepend PATH "$FOAM_USER_APPBIN"
+    path_prepend LD_LIBRARY_PATH "$FOAM_USER_LIBBIN"
 else
     if [ -n "${FOAMNORDIC_GCC_MODULE:-}" ] && command -v module >/dev/null 2>&1; then
         module is-loaded "$FOAMNORDIC_GCC_MODULE" 2>/dev/null ||
@@ -2322,9 +2333,15 @@ step_register_jupyter_kernel() {
     source "$BASE_SCRATCH/Python4FoamNordic.sh"
 
     launcher="$STATE_ROOT/jupyter-kernel.sh"
-    kernel_name="$ENV_NICKNAME-foamnordic-$MACHINE_ARCH"
-    kernel_display="Python 3.12 ($ENV_NICKNAME FoamNordic $MACHINE_ARCH)"
-    kernel_dir="$HOME/.local/share/jupyter/kernels/$kernel_name"
+    kernel_name="$ENV_NICKNAME-$MACHINE_ARCH"
+    kernel_display="Python 3.12 ($ENV_NICKNAME $MACHINE_ARCH)"
+    kernel_dir="$(
+        "$ENV_PREFIX/bin/python" - <<'PY_JUPYTER_DATA'
+from jupyter_core.paths import jupyter_data_dir
+
+print(jupyter_data_dir())
+PY_JUPYTER_DATA
+    )/kernels/$kernel_name"
 
     cat <<EOF_KERNEL_LAUNCHER > "$launcher"
 #!/bin/bash
@@ -2355,6 +2372,63 @@ EOF_KERNEL_JSON
 step_validate_installation() {
     # shellcheck disable=SC1090
     FOAMNORDIC_ENV_QUIET=1 source "$BASE_SCRATCH/Python4FoamNordic.sh"
+
+    "$ENV_PREFIX/bin/python" - <<'PY_RUNTIME_VALIDATION'
+import os
+import site
+from pathlib import Path
+
+import smartredis
+import smartsim
+
+if site.ENABLE_USER_SITE:
+    raise RuntimeError(
+        "Python user-site packages are enabled in the FoamNordic environment."
+    )
+
+runtime_root = (
+    Path(os.environ["FOAMNORDIC_RUNTIME_DIR"])
+    / os.environ["FOAMNORDIC_PROFILE"]
+).resolve()
+
+smartredis_path = Path(smartredis.__file__).resolve()
+smartsim_path = Path(smartsim.__file__).resolve()
+
+for name, package_path in (
+    ("SmartRedis", smartredis_path),
+    ("SmartSim", smartsim_path),
+):
+    if str(package_path).startswith(
+        str(Path.home() / ".local")
+    ):
+        raise RuntimeError(
+            f"{name} resolved from the user site: {package_path}"
+        )
+
+if os.environ.get("SMARTSIM_DEP_PATH") != str(runtime_root):
+    raise RuntimeError(
+        "SMARTSIM_DEP_PATH does not point to the FoamNordic runtime."
+    )
+
+if os.environ.get("FOAMNORDIC_OPENFOAM_ENABLED") == "yes":
+    expected_foam_user_dir = (
+        runtime_root
+        / "openfoam-user"
+        / f"v{os.environ['FOAMNORDIC_OPENFOAM_VERSION']}"
+    ).resolve()
+
+    actual_foam_user_dir = Path(
+        os.environ["FOAM_USER_DIR"]
+    ).resolve()
+
+    if actual_foam_user_dir != expected_foam_user_dir:
+        raise RuntimeError(
+            "FOAM_USER_DIR does not point to the FoamNordic runtime: "
+            f"{actual_foam_user_dir}"
+        )
+
+print("FoamNordic runtime environment validation: PASS")
+PY_RUNTIME_VALIDATION
 
     "$ENV_PREFIX/bin/foamnordic" doctor
 
