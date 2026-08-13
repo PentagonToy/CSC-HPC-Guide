@@ -1,5 +1,5 @@
 #!/bin/bash
-# Modular SmartSim-CSC installer for CSC Roihu.
+# Modular FoamNordic research environment installer for CSC Roihu.
 #
 # Features:
 #   - x86_64 CPU and aarch64 GPU profile detection
@@ -10,13 +10,12 @@
 #   - package cache limited to base4SmartSim.yml and requirements.in
 #   - archive, directory, or disabled cache storage modes
 #   - optional PySR/Julia and CSC OpenFOAM module integration
-#   - Tykky environment, native SmartRedis, loader, updater, and Jupyter kernel
+#   - Tykky environment, FoamNordic runtime, loader, updater, and Jupyter kernel
 #
 # Cache policy:
 #   Cached:     conda packages for base4SmartSim.yml, PyPI wheels and source
 #               distributions for requirements.in.
-#   Not cached: every version control dependency (SmartSim-CSC, FoamPilot,
-#               DataGraph), the native SmartRedis build, and the OpenFOAM
+#   Not cached: every version control dependency (FoamNordic and DataGraph), the native SmartRedis build, and the OpenFOAM
 #               integration. Those are always re-fetched and rebuilt.
 
 # shellcheck shell=bash
@@ -31,8 +30,9 @@ set -Eeuo pipefail
 # ================================================================
 # USER CONFIGURATION
 # ================================================================
-readonly SMARTSIM_CSC_REPO="https://github.com/PentagonToy/SmartSim-CSC.git"
-readonly SMARTSIM_CSC_REF="da12dac83cfca6742ab66140063e9eac78bcf4e2"
+readonly FOAMNORDIC_REPO="https://github.com/PentagonToy/FoamNordic.git"
+readonly FOAMNORDIC_REF="0000000000000000000000000000000000000000"
+readonly FOAMNORDIC_VERSION="1.0.0"
 readonly TYKKY_MINIFORGE_VERSION="26.3.2-2"
 
 readonly X64_GCC_MODULE="gcc/13.4.0"
@@ -48,7 +48,7 @@ readonly OPENFOAM_MPI_MODULE="openmpi/5.0.10"
 # ================================================================
 # GLOBAL STATE
 # ================================================================
-readonly TOTAL_STEPS=12
+readonly TOTAL_STEPS=10
 CURRENT_STEP="initialisation"
 CURRENT_STEP_NUMBER=0
 CURRENT_STEP_LOG=""
@@ -551,7 +551,7 @@ detect_architecture() {
         x86_64)
             ENV_ARCH="x64"
             KERNEL_ARCH="x86_64"
-            SMARTSIM_CSC_PROFILE="linux-x64-cpu"
+            FOAMNORDIC_PROFILE="linux-x64-cpu"
             GCC_MODULE="$X64_GCC_MODULE"
             CMAKE_MODULE="$X64_CMAKE_MODULE"
             CUDA_MODULE=""
@@ -560,7 +560,7 @@ detect_architecture() {
         aarch64)
             ENV_ARCH="arm64"
             KERNEL_ARCH="aarch64"
-            SMARTSIM_CSC_PROFILE="linux-arm64-gpu"
+            FOAMNORDIC_PROFILE="linux-arm64-gpu"
             GCC_MODULE="$ARM64_GCC_MODULE"
             CMAKE_MODULE="$ARM64_CMAKE_MODULE"
             CUDA_MODULE="$ARM64_CUDA_MODULE"
@@ -572,7 +572,7 @@ detect_architecture() {
             ;;
     esac
 
-    export ENV_ARCH KERNEL_ARCH SMARTSIM_CSC_PROFILE
+    export ENV_ARCH KERNEL_ARCH FOAMNORDIC_PROFILE
     export GCC_MODULE CMAKE_MODULE CUDA_MODULE JAX_PLATFORMS
 }
 
@@ -645,7 +645,7 @@ write_cache_helper() {
 #   * conda packages required by base4SmartSim.yml
 #   * PyPI wheels and source distributions required by requirements.in
 #
-# Version control dependencies (SmartSim-CSC, FoamPilot, DataGraph) and every
+# Version control dependencies (FoamNordic, DataGraph) and every
 # compiled artefact (SmartRedis, the OpenFOAM integration) are never cached.
 #
 # Storage modes:
@@ -988,8 +988,8 @@ prompt_cache_mode() {
     echo "  * conda packages listed in base4SmartSim.yml"
     echo "  * PyPI wheels and source distributions listed in requirements.in"
     echo
-    echo "It never stores GitHub sources or compiled output. SmartSim-CSC,"
-    echo "FoamPilot, DataGraph, SmartRedis, and the OpenFOAM integration are"
+    echo "It never stores GitHub sources or compiled output. FoamNordic,"
+    echo "FoamNordic, DataGraph, SmartRedis, and the OpenFOAM integration are"
     echo "re-fetched and rebuilt on every run."
     echo
     echo "Storage mode:"
@@ -1053,7 +1053,7 @@ prompt_cache_policy() {
 
 collect_configuration() {
     echo "=================================================================="
-    echo " Unified ML + SmartSim Environment Installer (Roihu only)"
+    echo " Unified ML + FoamNordic Environment Installer (Roihu only)"
     echo "=================================================================="
     echo
 
@@ -1072,7 +1072,7 @@ collect_configuration() {
     echo
     echo "--- Target architecture ---"
     detect_architecture
-    echo "Detected $(uname -m): ENV_ARCH=$ENV_ARCH, PROFILE=$SMARTSIM_CSC_PROFILE"
+    echo "Detected $(uname -m): ENV_ARCH=$ENV_ARCH, PROFILE=$FOAMNORDIC_PROFILE"
 
     echo
     echo "--- Optional components ---"
@@ -1113,7 +1113,7 @@ collect_configuration() {
         "Project user directory" "$PROJECT_USER_DIR" \
         "Environment nickname" "$ENV_NICKNAME" \
         "Architecture" "$ENV_ARCH" \
-        "SmartSim profile" "$SMARTSIM_CSC_PROFILE" \
+        "FoamNordic profile" "$FOAMNORDIC_PROFILE" \
         "PySR / Julia" "$INSTALL_PYSR" \
         "OpenFOAM" "$BUILD_OPENFOAM" \
         "OpenFOAM version" "${OPENFOAM_VERSION:+v$OPENFOAM_VERSION}" \
@@ -1125,7 +1125,7 @@ collect_configuration() {
         "Parallel build jobs" "$BUILD_JOBS" \
         "Julia build threads" "$JULIA_BUILD_THREADS" \
         "Tykky Miniforge" "$TYKKY_MINIFORGE_VERSION" \
-        "SmartSim-CSC ref" "$SMARTSIM_CSC_REF"
+        "FoamNordic ref" "$FOAMNORDIC_REF"
     echo
 
     read -r -p "Proceed with this configuration? [y/N]: " CONFIRM_ALL
@@ -1137,8 +1137,7 @@ collect_configuration() {
 
 set_base_paths() {
     export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
-    export PYTHON_BASE="$BASE_SCRATCH/Python"
-    export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
+        export PYTHON_ROOT="$BASE_SCRATCH/Python"
 
     mkdir -p "$PYTHON_ROOT"
 }
@@ -1147,9 +1146,9 @@ set_global_paths() {
     set_base_paths
 
     export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
-    export SMARTSIM_CSC_REPO SMARTSIM_CSC_REF
-    export SMARTSIM_CSC_DIR="$PYTHON_ROOT/src/SmartSim-CSC"
-    export SMARTSIM_CSC_PROFILE
+    export FOAMNORDIC_REPO FOAMNORDIC_REF FOAMNORDIC_VERSION
+    export FOAMNORDIC_DIR="$PYTHON_ROOT/src/FoamNordic"
+    export FOAMNORDIC_PROFILE
     export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
     export OPENFOAM_ROOT="$BASE_SCRATCH/OpenFOAM"
     export OPENFOAM_MODULE
@@ -1174,7 +1173,7 @@ step_prepare_cache() {
 
     printf '\nCached:     conda packages (base4SmartSim.yml)\n'
     printf '            PyPI wheels and sdists (requirements.in)\n'
-    printf 'Not cached: SmartSim-CSC, FoamPilot, DataGraph, SmartRedis, OpenFOAM\n'
+    printf 'Not cached: FoamNordic, DataGraph, SmartRedis, OpenFOAM\n'
 }
 
 step_write_identity() {
@@ -1301,6 +1300,7 @@ tensorly
 dvc
 
 # --- Custom Utilities ---
+jinja2
 onsaemiro
 DataGraph @ git+https://github.com/PentagonToy/DataGraph.git#subdirectory=DataGraph
 
@@ -1334,6 +1334,9 @@ PyYAML
 # --- Profiling & Logging ---
 loguru
 pyinstrument
+
+# --- PyPI ---
+twine
 
 # --- HPC / Slurm ---
 submitit
@@ -1434,15 +1437,13 @@ set -Eeuo pipefail
 : "${CW_BUILD_TMPDIR:?CW_BUILD_TMPDIR is not set}"
 : "${PYTHON_ROOT:?PYTHON_ROOT is not set}"
 : "${ENV_ARCH:?ENV_ARCH is not set}"
-: "${SMARTSIM_CSC_REPO:?SMARTSIM_CSC_REPO is not set}"
-: "${SMARTSIM_CSC_REF:?SMARTSIM_CSC_REF is not set}"
-: "${SMARTSIM_CSC_DIR:?SMARTSIM_CSC_DIR is not set}"
-: "${SMARTSIM_CSC_PROFILE:?SMARTSIM_CSC_PROFILE is not set}"
+: "${FOAMNORDIC_REPO:?FOAMNORDIC_REPO is not set}"
+: "${FOAMNORDIC_REF:?FOAMNORDIC_REF is not set}"
+: "${FOAMNORDIC_DIR:?FOAMNORDIC_DIR is not set}"
 : "${INSTALL_PYSR:=yes}"
 : "${BUILD_JOBS:=1}"
 : "${JULIA_BUILD_THREADS:=1}"
 
-# The cache lifecycle is owned by the installer; never delete it from here.
 : "${PIP_CACHE_DIR:=$CW_BUILD_TMPDIR/.pip_cache}"
 : "${UV_CACHE_DIR:=$CW_BUILD_TMPDIR/.uv_cache}"
 
@@ -1460,28 +1461,16 @@ export JULIA_NUM_THREADS="$JULIA_BUILD_THREADS"
 
 mkdir -p "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
 
-echo "pip cache: $PIP_CACHE_DIR"
-echo "uv cache:  $UV_CACHE_DIR"
-
 # shellcheck disable=SC1091
 source "$PYTHON_ROOT/vcs4SmartSim.sh"
 collect_vcs_packages "$PYTHON_ROOT/requirements.in"
 
 python -m pip install --progress-bar off uv
 
-# Cached: everything from PyPI. Forced fresh: every git requirement.
 uv pip install \
     --link-mode=copy \
     "${VCS_REFRESH_ARGS[@]}" \
     --requirements "$PYTHON_ROOT/requirements.in"
-
-# FoamPilot always comes straight from GitHub, never from the cache.
-uv pip install \
-    --no-cache \
-    --link-mode=copy \
-    --reinstall-package foampilot \
-    --no-deps \
-    "git+${SMARTSIM_CSC_REPO}@${SMARTSIM_CSC_REF}#subdirectory=components/foampilot"
 
 if [ "$INSTALL_PYSR" = "yes" ]; then
     PYTHON_PREFIX="$(python -c 'import sys; print(sys.prefix)')"
@@ -1521,80 +1510,41 @@ subprocess.run(
     check=True,
 )
 PY
-
-    python - <<'PY'
-import pysr
-print(f"PySR version: {pysr.__version__}")
-PY
 fi
 
-mkdir -p "$(dirname "$SMARTSIM_CSC_DIR")"
+mkdir -p "$(dirname "$FOAMNORDIC_DIR")"
 
-if [ -d "$SMARTSIM_CSC_DIR/.git" ]; then
-    git -C "$SMARTSIM_CSC_DIR" fetch --tags origin
+if [ -d "$FOAMNORDIC_DIR/.git" ]; then
+    git -C "$FOAMNORDIC_DIR" fetch --tags origin
 else
-    rm -rf "$SMARTSIM_CSC_DIR"
-    git clone "$SMARTSIM_CSC_REPO" "$SMARTSIM_CSC_DIR"
+    rm -rf "$FOAMNORDIC_DIR"
+    git clone "$FOAMNORDIC_REPO" "$FOAMNORDIC_DIR"
 fi
 
-git -C "$SMARTSIM_CSC_DIR" switch \
-    --force-create foampilot-install \
-    "$SMARTSIM_CSC_REF"
-git -C "$SMARTSIM_CSC_DIR" clean -ffdx
+git -C "$FOAMNORDIC_DIR" switch \
+    --force-create foamnordic-install \
+    "$FOAMNORDIC_REF"
 
-export USE_SYSTEMD=no
-export PYTHONNOUSERSITE=1
+git -C "$FOAMNORDIC_DIR" clean -ffdx
 
-PYTHONNOUSERSITE=1 \
-BUILD_JOBS="$BUILD_JOBS" \
-MAKEFLAGS="-j$BUILD_JOBS" \
-CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS" \
-    python -m foampilot.cli install runtime \
-        --repository-root "$SMARTSIM_CSC_DIR" \
-        --profile "$SMARTSIM_CSC_PROFILE" \
-        --python "$(command -v python)" \
-        --smart "$(dirname "$(command -v python)")/smart"
-
-# Consistency pass; the git requirements are already at the pinned revisions.
 uv pip install \
-    --link-mode=copy \
-    --requirements "$PYTHON_ROOT/requirements.in"
+    --no-deps \
+    --editable "$FOAMNORDIC_DIR"
 
 uv pip check
 
+python - <<'PY'
+from pathlib import Path
+import foamnordic
+
+print(f"FoamNordic source: {Path(foamnordic.__file__).resolve()}")
+PY
+
 python -m pip list --format=freeze \
-    | grep -viE '^(smartredis|smartsim)==' \
     | sort \
     > "$PYTHON_ROOT/requirements-$ENV_ARCH.txt"
 
-if [ "$INSTALL_PYSR" = "yes" ]; then
-    python - <<'PY' > "$PYTHON_ROOT/julia-environment-$ENV_ARCH.txt"
-import subprocess
-import juliapkg
-
-julia = juliapkg.executable()
-project = juliapkg.project()
-
-print(f"Julia executable: {julia}")
-print(f"Julia project: {project}\n")
-
-subprocess.run(
-    [
-        julia,
-        f"--project={project}",
-        "-e",
-        "using InteractiveUtils; versioninfo(); using Pkg; Pkg.status()",
-    ],
-    check=True,
-)
-PY
-else
-    echo "PySR/Julia was not installed (INSTALL_PYSR=no)." \
-        > "$PYTHON_ROOT/julia-environment-$ENV_ARCH.txt"
-fi
-
-# Keep version control artefacts out of the persistent cache.
-drop_vcs_cache_entries foampilot "${VCS_PACKAGES[@]}"
+drop_vcs_cache_entries "${VCS_PACKAGES[@]}"
 EOF_EXTRA
 
     chmod +x "$PYTHON_ROOT/extra4SmartSim.sh"
@@ -1614,7 +1564,7 @@ step_build_tykky() {
     export TMPDIR="$TMP_BUILD_DIR"
     export CW_BUILD_TMPDIR="$TMP_BUILD_DIR"
     export INSTALL_PYSR BUILD_JOBS JULIA_BUILD_THREADS
-    export SMARTSIM_CSC_REPO SMARTSIM_CSC_REF SMARTSIM_CSC_DIR SMARTSIM_CSC_PROFILE
+    export FOAMNORDIC_REPO FOAMNORDIC_REF FOAMNORDIC_DIR
     export PIP_CACHE_DIR UV_CACHE_DIR
 
     # The temporary build directory is disposable; the cache lives elsewhere.
@@ -1687,12 +1637,13 @@ PY
     mkdir -p "$JULIA_DEPOT_RUNTIME"
 }
 
-step_build_native_smartredis() {
+step_build_foamnordic() {
     local smartredis_cc
     local smartredis_cxx
     local smartredis_fc
+    local -a build_arguments
 
-    module purge
+    module --force purge
     module load "$GCC_MODULE"
     module load "$CMAKE_MODULE"
 
@@ -1700,103 +1651,57 @@ step_build_native_smartredis() {
     smartredis_cxx="$(command -v g++)"
     smartredis_fc="$(command -v gfortran)"
 
+    if [ "$ENV_ARCH" = "x64" ] && [ "$BUILD_OPENFOAM" = "yes" ]; then
+        module --force purge
+        module load "$OPENFOAM_GCC_MODULE"
+        module load "$OPENFOAM_MPI_MODULE"
+        module load "$OPENFOAM_MODULE"
+
+        if [ "${WM_PROJECT_VERSION:-}" != "v$OPENFOAM_VERSION" ]; then
+            echo "Loaded OpenFOAM version does not match the selection."
+            echo "Expected: v$OPENFOAM_VERSION"
+            echo "Loaded:   ${WM_PROJECT_VERSION:-not loaded}"
+            return 1
+        fi
+    fi
+
     cat <<EOF_RUNTIME > "$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
-export SMARTSIM_GCC_MODULE="$GCC_MODULE"
-export SMARTSIM_CMAKE_MODULE="$CMAKE_MODULE"
-export SMARTSIM_CUDA_MODULE="$CUDA_MODULE"
-export SMARTSIM_OPENFOAM_GCC_MODULE="$OPENFOAM_GCC_MODULE"
-export SMARTSIM_OPENFOAM_MPI_MODULE="$OPENFOAM_MPI_MODULE"
-export SMARTSIM_OPENFOAM_MODULE="$OPENFOAM_MODULE"
-export SMARTSIM_OPENFOAM_VERSION="$OPENFOAM_VERSION"
-export SMARTSIM_PYSR_ENABLED="$INSTALL_PYSR"
-export SMARTSIM_OPENFOAM_ENABLED="$BUILD_OPENFOAM"
-export SMARTSIM_BUILD_JOBS="$BUILD_JOBS"
+export FOAMNORDIC_GCC_MODULE="$GCC_MODULE"
+export FOAMNORDIC_CMAKE_MODULE="$CMAKE_MODULE"
+export FOAMNORDIC_CUDA_MODULE="$CUDA_MODULE"
+export FOAMNORDIC_OPENFOAM_GCC_MODULE="$OPENFOAM_GCC_MODULE"
+export FOAMNORDIC_OPENFOAM_MPI_MODULE="$OPENFOAM_MPI_MODULE"
+export FOAMNORDIC_OPENFOAM_MODULE="$OPENFOAM_MODULE"
+export FOAMNORDIC_OPENFOAM_VERSION="$OPENFOAM_VERSION"
+export FOAMNORDIC_PYSR_ENABLED="$INSTALL_PYSR"
+export FOAMNORDIC_OPENFOAM_ENABLED="$BUILD_OPENFOAM"
+export FOAMNORDIC_BUILD_JOBS="$BUILD_JOBS"
+export FOAMNORDIC_PROFILE="$FOAMNORDIC_PROFILE"
+export FOAMNORDIC_REF="$FOAMNORDIC_REF"
 EOF_RUNTIME
     chmod 600 "$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
 
-    # Always rebuilt: the sources come from the SmartSim-CSC checkout.
+    build_arguments=(
+        build
+        --profile "$FOAMNORDIC_PROFILE"
+        --smartredis-dir "$SMARTREDIS_DIR"
+        --jobs "$BUILD_JOBS"
+    )
+
+    if [ "$BUILD_OPENFOAM" = "yes" ]; then
+        build_arguments+=(
+            --foam-user-dir "$OPENFOAM_USER_DIR"
+            --openfoam-version "$OPENFOAM_VERSION"
+        )
+    fi
+
     SMARTREDIS_CC="$smartredis_cc" \
     SMARTREDIS_CXX="$smartredis_cxx" \
     SMARTREDIS_FC="$smartredis_fc" \
-        "$ENV_PREFIX/bin/python" -m foampilot.cli install smartredis \
-            --repository-root "$SMARTSIM_CSC_DIR" \
-            --smartredis-dir "$SMARTREDIS_DIR" \
-            --build-jobs "$BUILD_JOBS"
-}
-
-step_verify_native_smartredis() {
-    local lib_dir
-    local library
-    local output
-
-    if [ -d "$SMARTREDIS_DIR/install/lib64" ]; then
-        lib_dir="lib64"
-    else
-        lib_dir="lib"
-    fi
-
-    for library in \
-        "$SMARTREDIS_DIR/install/$lib_dir/libsmartredis.so" \
-        "$SMARTREDIS_DIR/install/$lib_dir/libsmartredis-fortran.so"
-    do
-        if [ ! -f "$library" ]; then
-            echo "Missing native SmartRedis library: $library" >&2
-            return 1
-        fi
-
-        if ! output="$(
-            LD_LIBRARY_PATH="$SMARTREDIS_DIR/install/$lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-                ldd "$library" 2>&1
-        )"; then
-            printf '%s\n' "$output" >&2
-            return 1
-        fi
-
-        printf '%s\n' "$output"
-
-        if grep -F 'not found' <<< "$output" >/dev/null; then
-            echo "Native SmartRedis dependency verification failed: $library" >&2
-            return 1
-        fi
-    done
-}
-
-step_build_openfoam() {
-    if [ "$BUILD_OPENFOAM" != "yes" ]; then
-        return
-    fi
-
-    if [ "$ENV_ARCH" != "x64" ]; then
-        echo "OpenFOAM integration is supported only on x86_64."
-        return 1
-    fi
-
-    module --force purge
-    module load "$OPENFOAM_GCC_MODULE"
-    module load "$OPENFOAM_MPI_MODULE"
-    module load "$OPENFOAM_MODULE"
-
-    if [ "${WM_PROJECT_VERSION:-}" != "v$OPENFOAM_VERSION" ]; then
-        echo "Loaded OpenFOAM version does not match the selection."
-        echo "Expected: v$OPENFOAM_VERSION"
-        echo "Loaded:   ${WM_PROJECT_VERSION:-not loaded}"
-        return 1
-    fi
-
-    export FOAM_USER_DIR="$OPENFOAM_USER_DIR"
-    export WM_PROJECT_USER_DIR="$OPENFOAM_USER_DIR"
-    export FOAM_USER_APPBIN="$OPENFOAM_USER_DIR/platforms/$WM_OPTIONS/bin"
-    export FOAM_USER_LIBBIN="$OPENFOAM_USER_DIR/platforms/$WM_OPTIONS/lib"
-    export WM_NCOMPPROCS="$BUILD_JOBS"
-
-    # Always rebuilt: the sources come from the SmartSim-CSC checkout.
-    rm -rf "$OPENFOAM_USER_DIR"
-
-    "$ENV_PREFIX/bin/python" -m foampilot.cli install openfoam \
-        --repository-root "$SMARTSIM_CSC_DIR" \
-        --smartredis-dir "$SMARTREDIS_DIR" \
-        --foam-user-dir "$OPENFOAM_USER_DIR" \
-        --openfoam-version "$OPENFOAM_VERSION"
+    MAKEFLAGS="-j$BUILD_JOBS" \
+    CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS" \
+    WM_NCOMPPROCS="$BUILD_JOBS" \
+        "$ENV_PREFIX/bin/foamnordic" "${build_arguments[@]}"
 }
 
 step_create_loader() {
@@ -1824,22 +1729,20 @@ fi
 source "$IDENTITY_FILE"
 
 export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
-export PYTHON_BASE="$BASE_SCRATCH/Python"
-export PYTHON_ROOT="$PYTHON_BASE/PythonSmartSim"
-export SMARTSIM_CSC_DIR="$PYTHON_ROOT/src/SmartSim-CSC"
+export PYTHON_ROOT="$BASE_SCRATCH/Python"
 
 case "$(uname -m)" in
     x86_64)
         export ENV_ARCH="x64"
         export KERNEL_ARCH="x86_64"
         export JAX_PLATFORMS="cpu"
-        export SMARTSIM_CSC_PROFILE="linux-x64-cpu"
+        export FOAMNORDIC_PROFILE="linux-x64-cpu"
         ;;
     aarch64)
         export ENV_ARCH="arm64"
         export KERNEL_ARCH="aarch64"
         export JAX_PLATFORMS="cuda"
-        export SMARTSIM_CSC_PROFILE="linux-arm64-gpu"
+        export FOAMNORDIC_PROFILE="linux-arm64-gpu"
         ;;
     *)
         echo "Unsupported architecture: $(uname -m)"
@@ -1848,28 +1751,21 @@ case "$(uname -m)" in
 esac
 
 export ENV_PREFIX="$PYTHON_ROOT/envs/$ENV_NICKNAME-3.12-$ENV_ARCH"
+export FOAMNORDIC_DIR="$PYTHON_ROOT/src/FoamNordic"
 export SMARTREDIS_DIR="$BASE_SCRATCH/SmartRedis-$ENV_ARCH"
 export SMARTREDIS_INCLUDE="$SMARTREDIS_DIR/install/include"
 export SMARTREDIS_DEP_INCLUDE="$SMARTREDIS_DIR/install/include"
-export OPENFOAM_ROOT="$BASE_SCRATCH/OpenFOAM"
 
 if [ ! -x "$ENV_PREFIX/bin/python" ]; then
     echo "Python environment not found: $ENV_PREFIX"
     return 1
 fi
 
-if [ ! -d "$SMARTREDIS_DIR/install" ]; then
-    echo "SmartRedis installation not found: $SMARTREDIS_DIR/install"
-    return 1
-fi
-
 RUNTIME_CONFIG="$PYTHON_ROOT/runtime-$ENV_ARCH.sh"
 [ -f "$RUNTIME_CONFIG" ] && source "$RUNTIME_CONFIG"
 
-export OPENFOAM_USER_DIR="$OPENFOAM_ROOT/OpenFOAM-v${SMARTSIM_OPENFOAM_VERSION:-2412}"
-
-: "${SMARTSIM_PYSR_ENABLED:=yes}"
-: "${SMARTSIM_OPENFOAM_ENABLED:=no}"
+: "${FOAMNORDIC_PYSR_ENABLED:=yes}"
+: "${FOAMNORDIC_OPENFOAM_ENABLED:=no}"
 
 path_prepend() {
     local variable_name="$1"
@@ -1886,54 +1782,48 @@ path_prepend() {
     esac
 }
 
+if [ "$FOAMNORDIC_OPENFOAM_ENABLED" = "yes" ] && [ "$ENV_ARCH" = "x64" ]; then
+    if command -v module >/dev/null 2>&1; then
+        module --force purge
+        module load \
+            "$FOAMNORDIC_OPENFOAM_GCC_MODULE" \
+            "$FOAMNORDIC_OPENFOAM_MPI_MODULE" \
+            "$FOAMNORDIC_OPENFOAM_MODULE"
+    fi
+
+    if [ "${WM_PROJECT_VERSION:-}" != "v${FOAMNORDIC_OPENFOAM_VERSION:-2512}" ]; then
+        echo "Loaded OpenFOAM module does not match the runtime configuration."
+        return 1
+    fi
+else
+    if [ -n "${FOAMNORDIC_GCC_MODULE:-}" ] && command -v module >/dev/null 2>&1; then
+        module is-loaded "$FOAMNORDIC_GCC_MODULE" 2>/dev/null ||
+            module load "$FOAMNORDIC_GCC_MODULE"
+    fi
+
+    if [ -n "${FOAMNORDIC_CUDA_MODULE:-}" ] && command -v module >/dev/null 2>&1; then
+        module is-loaded "$FOAMNORDIC_CUDA_MODULE" 2>/dev/null ||
+            module load "$FOAMNORDIC_CUDA_MODULE"
+    fi
+fi
+
+path_prepend PATH "$ENV_PREFIX/bin"
+
 if [ -d "$SMARTREDIS_DIR/install/lib64" ]; then
     export SMARTREDIS_LIB_DIR="$SMARTREDIS_DIR/install/lib64"
 else
     export SMARTREDIS_LIB_DIR="$SMARTREDIS_DIR/install/lib"
 fi
-export SMARTREDIS_LIB="$SMARTREDIS_LIB_DIR"
 
-if [ "$SMARTSIM_OPENFOAM_ENABLED" = "yes" ] && [ "$ENV_ARCH" = "x64" ]; then
-    if command -v module >/dev/null 2>&1; then
-        module --force purge
-        module load \
-            "$SMARTSIM_OPENFOAM_GCC_MODULE" \
-            "$SMARTSIM_OPENFOAM_MPI_MODULE" \
-            "$SMARTSIM_OPENFOAM_MODULE"
-    fi
-
-    if [ "${WM_PROJECT_VERSION:-}" != "v${SMARTSIM_OPENFOAM_VERSION:-2412}" ]; then
-        echo "Loaded OpenFOAM module does not match the runtime configuration."
-        return 1
-    fi
-
-    export FOAM_USER_DIR="$OPENFOAM_USER_DIR"
-    export WM_PROJECT_USER_DIR="$OPENFOAM_USER_DIR"
-    export FOAM_USER_APPBIN="$OPENFOAM_USER_DIR/platforms/$WM_OPTIONS/bin"
-    export FOAM_USER_LIBBIN="$OPENFOAM_USER_DIR/platforms/$WM_OPTIONS/lib"
-
-    path_prepend PATH "$FOAM_USER_APPBIN"
-    path_prepend LD_LIBRARY_PATH "$FOAM_USER_LIBBIN"
-else
-    if [ -n "${SMARTSIM_GCC_MODULE:-}" ] && command -v module >/dev/null 2>&1; then
-        module is-loaded "$SMARTSIM_GCC_MODULE" 2>/dev/null ||
-            module load "$SMARTSIM_GCC_MODULE"
-    fi
-
-    if [ -n "${SMARTSIM_CUDA_MODULE:-}" ] && command -v module >/dev/null 2>&1; then
-        module is-loaded "$SMARTSIM_CUDA_MODULE" 2>/dev/null ||
-            module load "$SMARTSIM_CUDA_MODULE"
-    fi
+if [ -d "$SMARTREDIS_LIB_DIR" ]; then
+    export SMARTREDIS_LIB="$SMARTREDIS_LIB_DIR"
+    path_prepend LD_LIBRARY_PATH "$SMARTREDIS_LIB_DIR"
+    path_prepend CMAKE_PREFIX_PATH "$SMARTREDIS_DIR/install"
 fi
 
-path_prepend PATH "$ENV_PREFIX/bin"
-path_prepend LD_LIBRARY_PATH "$SMARTREDIS_LIB_DIR"
-path_prepend CMAKE_PREFIX_PATH "$SMARTREDIS_DIR/install"
-
-export SMARTSIM_DB_FILE_PARSE_TRIALS=600
 export PYTHON_PREFIX="$("$ENV_PREFIX/bin/python" -c 'import sys; print(sys.prefix)')"
 
-if [ "$SMARTSIM_PYSR_ENABLED" = "yes" ]; then
+if [ "$FOAMNORDIC_PYSR_ENABLED" = "yes" ]; then
     export JULIA_ENV_RUNTIME="$BASE_SCRATCH/.julia_env_runtime_$ENV_ARCH"
     export JULIA_DEPOT_RUNTIME="$BASE_SCRATCH/.julia_depot_runtime_$ENV_ARCH"
 
@@ -1956,15 +1846,15 @@ else
     unset PYTHON_JULIACALL_THREADS PYTHON_JULIACALL_EXE PYTHON_JULIACALL_PROJECT
 fi
 
-export JUPYTER_KERNEL_NAME="$ENV_NICKNAME-smartsim-$KERNEL_ARCH"
-export JUPYTER_KERNEL_DISPLAY="Python 3.12 ($ENV_NICKNAME SmartSim $KERNEL_ARCH)"
+export JUPYTER_KERNEL_NAME="$ENV_NICKNAME-foamnordic-$KERNEL_ARCH"
+export JUPYTER_KERNEL_DISPLAY="Python 3.12 ($ENV_NICKNAME FoamNordic $KERNEL_ARCH)"
 export JUPYTER_KERNEL_DIR="$HOME/.local/share/jupyter/kernels/$JUPYTER_KERNEL_NAME"
 
-if [ "${SMARTSIM_ENV_QUIET:-0}" != "1" ]; then
-    if [ "$SMARTSIM_OPENFOAM_ENABLED" = "yes" ] && [ "$ENV_ARCH" = "x64" ]; then
-        echo "SmartSim environment loaded: $ENV_NICKNAME ($ENV_ARCH), OpenFOAM v${SMARTSIM_OPENFOAM_VERSION:-2412}"
+if [ "${FOAMNORDIC_ENV_QUIET:-0}" != "1" ]; then
+    if [ "$FOAMNORDIC_OPENFOAM_ENABLED" = "yes" ] && [ "$ENV_ARCH" = "x64" ]; then
+        echo "FoamNordic environment loaded: $ENV_NICKNAME ($ENV_ARCH), OpenFOAM v${FOAMNORDIC_OPENFOAM_VERSION:-2512}"
     else
-        echo "SmartSim environment loaded: $ENV_NICKNAME ($ENV_ARCH)"
+        echo "FoamNordic environment loaded: $ENV_NICKNAME ($ENV_ARCH)"
     fi
 fi
 
@@ -2071,7 +1961,7 @@ python -m pip list --format=freeze \
 
 rm -f "$UPDATE_REQUEST"
 
-drop_vcs_cache_entries foampilot "${VCS_PACKAGES[@]}"
+drop_vcs_cache_entries "${VCS_PACKAGES[@]}"
 EOF_UPDATE_POST
 
     chmod +x "$PYTHON_ROOT/update4SmartSim.sh"
@@ -2120,7 +2010,7 @@ done
 source "$HOME/.config/csc-hpc/identity.sh"
 
 export BASE_SCRATCH="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities"
-export PYTHON_ROOT="$BASE_SCRATCH/Python/PythonSmartSim"
+export PYTHON_ROOT="$BASE_SCRATCH/Python"
 
 case "$(uname -m)" in
     x86_64) ENV_ARCH="x64" ;;
@@ -2200,8 +2090,8 @@ for package in "${PACKAGES[@]}"; do
     )"
 
     case "$package_name" in
-        smartsim|smartredis|jax|jaxlib|jax-cuda12-plugin|jax-cuda12-pjrt)
-            echo "$package_name is managed by SmartSim-CSC and cannot be updated here."
+        foamnordic|smartsim|smartredis|jax|jaxlib|jax-cuda12-plugin|jax-cuda12-pjrt)
+            echo "$package_name is managed by FoamNordic and cannot be updated here."
             exit 1
             ;;
         pysr|julia)
@@ -2331,15 +2221,15 @@ step_register_jupyter_kernel() {
     source "$BASE_SCRATCH/Python4SmartSim.sh"
 
     launcher="$PYTHON_ROOT/jupyter-kernel-$ENV_ARCH.sh"
-    kernel_name="$ENV_NICKNAME-smartsim-$KERNEL_ARCH"
-    kernel_display="Python 3.12 ($ENV_NICKNAME SmartSim $KERNEL_ARCH)"
+    kernel_name="$ENV_NICKNAME-foamnordic-$KERNEL_ARCH"
+    kernel_display="Python 3.12 ($ENV_NICKNAME FoamNordic $KERNEL_ARCH)"
     kernel_dir="$HOME/.local/share/jupyter/kernels/$kernel_name"
 
     cat <<EOF_KERNEL_LAUNCHER > "$launcher"
 #!/bin/bash
-export SMARTSIM_ENV_QUIET=1
+export FOAMNORDIC_ENV_QUIET=1
 source "$BASE_SCRATCH/Python4SmartSim.sh" || exit 1
-unset SMARTSIM_ENV_QUIET
+unset FOAMNORDIC_ENV_QUIET
 exec "$ENV_PREFIX/bin/python" -m ipykernel_launcher "\$@"
 EOF_KERNEL_LAUNCHER
     chmod +x "$launcher"
@@ -2363,9 +2253,16 @@ EOF_KERNEL_JSON
 
 step_validate_installation() {
     # shellcheck disable=SC1090
-    SMARTSIM_ENV_QUIET=1 source "$BASE_SCRATCH/Python4SmartSim.sh"
+    FOAMNORDIC_ENV_QUIET=1 source "$BASE_SCRATCH/Python4SmartSim.sh"
 
-    "$ENV_PREFIX/bin/python" -m foampilot.cli doctor
+    "$ENV_PREFIX/bin/foamnordic" doctor
+
+    "$ENV_PREFIX/bin/python" - <<'PY'
+from pathlib import Path
+import foamnordic
+
+print(f"FoamNordic: {Path(foamnordic.__file__).resolve()}")
+PY
 
     if [ "$INSTALL_PYSR" = "yes" ]; then
         "$ENV_PREFIX/bin/python" - <<'PY'
@@ -2386,7 +2283,7 @@ step_finish() {
     printf 'Load with: source "%s"\n' "$BASE_SCRATCH/Python4SmartSim.sh"
     printf 'Update packages with: smartsim-update <package>\n'
     printf 'Inspect the cache with: smartsim-update --cache-info\n'
-    printf 'SmartSim-CSC ref: %s\n' "$SMARTSIM_CSC_REF"
+    printf 'FoamNordic ref: %s\n' "$FOAMNORDIC_REF"
 
     if [ "$BUILD_OPENFOAM" = "yes" ]; then
         printf 'OpenFOAM module: %s\n' "$OPENFOAM_MODULE"
@@ -2408,15 +2305,13 @@ main() {
     run_step 1 "Preparing the package cache" step_prepare_cache
     run_step 2 "Writing identity and install options" step_write_identity
     run_step 3 "Creating configuration and build scripts" step_create_configuration
-    run_step 4 "Building the Tykky Python environment" step_build_tykky
+    run_step 4 "Building the Tykky Python environment and FoamNordic" step_build_tykky
     run_step 5 "Preparing the writable Julia runtime" step_prepare_julia_runtime
-    run_step 6 "Installing native SmartRedis through FoamPilot" step_build_native_smartredis
-    run_step 7 "Verifying native SmartRedis" step_verify_native_smartredis
-    run_step 8 "Installing the OpenFOAM integration through FoamPilot" step_build_openfoam
-    run_step 9 "Creating loader and update tooling" step_create_loader
-    run_step 10 "Registering the Jupyter kernel" step_register_jupyter_kernel
-    run_step 11 "Validating the installation with FoamPilot doctor" step_validate_installation
-    run_step 12 "Finalising and packing the package cache" step_finish
+    run_step 6 "Building FoamNordic runtime components" step_build_foamnordic
+    run_step 7 "Creating loader and update tooling" step_create_loader
+    run_step 8 "Registering the Jupyter kernel" step_register_jupyter_kernel
+    run_step 9 "Validating the FoamNordic installation" step_validate_installation
+    run_step 10 "Finalising and packing the package cache" step_finish
 
     total_duration_seconds=$((SECONDS - INSTALL_START_SECONDS))
     total_duration_text="$(

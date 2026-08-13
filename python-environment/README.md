@@ -1,28 +1,35 @@
-# SmartSim-CSC Environment Configuration
+# FoamNordic Environment Configuration on CSC Roihu
 
-Last updated: 29 July 2026
+Last updated: 13 August 2026
 
 > [!TIP]
 > ## One-Command Installation
 >
-> Copy `smartsim-python.sh` to a Roihu-accessible directory, then run:
+> Copy `python-install.sh` to a Roihu-accessible directory and run:
 >
 > ```bash
-> chmod +x smartsim-python.sh
-> ./smartsim-python.sh
+> chmod +x python-install.sh
+> ./python-install.sh
 > ```
 >
 > The installer must be executed with Bash. Do not source it.
+>
+> The environment loader created by the installer must be sourced:
+>
+> ```bash
+> source "/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities/Python4SmartSim.sh"
+> ```
 
 ---
 
 ## 1. Scope
 
-This guide describes the modular SmartSim-CSC installer for CSC Roihu.
+This guide describes the modular FoamNordic installer for CSC Roihu.
 
-The installer supports two automatically detected Roihu architectures:
+The installer automatically detects the host architecture and selects the
+corresponding FoamNordic profile.
 
-| Host architecture | `ENV_ARCH` | SmartSim-CSC profile | Intended use |
+| Host architecture | `ENV_ARCH` | FoamNordic profile | Intended use |
 |---|---:|---|---|
 | `x86_64` | `x64` | `linux-x64-cpu` | Roihu CPU nodes |
 | `aarch64` | `arm64` | `linux-arm64-gpu` | Roihu GPU nodes |
@@ -33,83 +40,85 @@ The architecture is detected using:
 uname -m
 ```
 
-The installer exits on unsupported architectures.
+Unsupported architectures cause the installer to exit.
 
 The installer provides:
 
 - Python 3.12
 - Tykky environment packaging
-- SmartSim-CSC monorepo installation
-- SmartSim and SmartRedis
-- Redis and RedisAI
-- ONNX Runtime and JAX RedisAI backends
-- Native SmartRedis C/C++/Fortran library
+- FoamNordic installation
+- FoamNordic build and runtime setup
+- SmartSim and SmartRedis integration
+- Redis and RedisAI-related runtime components
+- ONNX Runtime and JAX backend integration
+- Native SmartRedis C/C++/Fortran libraries
 - Optional PySR and Julia
 - Optional CSC OpenFOAM integration
 - Jupyter kernel registration
-- Compact spinner-based terminal output
-- Per-step logs and a combined installation log
 - Architecture-aware parallel compilation
+- Package caching for reproducible package downloads
+- Per-step logs and a combined installation log
 - `smartsim-update` for ordinary Python package updates
 
-OpenFOAM integration is available only for the `x86_64` profile. The installer supports OpenFOAM 2412, 2506, and 2512, and automatically disables the integration for the `aarch64` profile.
+The SmartSim, SmartRedis, Redis, and related runtime components are managed
+through FoamNordic. They should not be installed or rebuilt independently
+unless FoamNordic documentation explicitly requires it.
+
+OpenFOAM integration is available only for the `x86_64` profile.
 
 ---
 
-## 2. Pinned SmartSim-CSC Source
+## 2. FoamNordic Source and Version
 
-The installer uses the following repository and immutable commit:
-
-```text
-Repository:
-https://github.com/PentagonToy/SmartSim-CSC.git
-
-Commit:
-da12dac83cfca6742ab66140063e9eac78bcf4e2
-```
-
-These values are defined near the beginning of `smartsim-python.sh`:
-
-```bash
-readonly SMARTSIM_CSC_REPO="https://github.com/PentagonToy/SmartSim-CSC.git"
-readonly SMARTSIM_CSC_REF="da12dac83cfca6742ab66140063e9eac78bcf4e2"
-```
-
-The checkout is stored at:
+The installer uses the FoamNordic repository:
 
 ```text
-$PYTHON_ROOT/src/SmartSim-CSC
+https://github.com/PentagonToy/FoamNordic.git
 ```
 
-The installer maintains a local installation-only branch named
-`foampilot-install`, force-resets it to the pinned SmartSim-CSC commit,
-and removes untracked files with:
+The source reference is configured near the beginning of the installer:
 
 ```bash
-git switch \
-    --force-create foampilot-install \
-    "$SMARTSIM_CSC_REF"
-git clean -ffdx
+readonly FOAMNORDIC_REPO="https://github.com/PentagonToy/FoamNordic.git"
+readonly FOAMNORDIC_REF="..."
+readonly FOAMNORDIC_VERSION="1.0.0"
 ```
 
-The `foampilot-install` branch is managed only by the installer and is not
-pushed to the remote repository.
+Replace the placeholder `FOAMNORDIC_REF` with a real validated tag or commit
+before using the installer.
 
-The SmartSim-CSC repository is the source of:
+The source checkout is stored at:
 
-- SmartSim
-- SmartRedis
-- RedisAI
-- JAX backend integration
-- FoamPilot source
-- OpenFOAM integration
-- Build and validation scripts
+```text
+$PYTHON_ROOT/src/FoamNordic
+```
+
+The installer maintains a local installation branch named:
+
+```text
+foamnordic-install
+```
+
+The branch is reset to the configured source reference:
+
+```bash
+git -C "$FOAMNORDIC_DIR" switch \
+    --force-create foamnordic-install \
+    "$FOAMNORDIC_REF"
+
+git -C "$FOAMNORDIC_DIR" clean -ffdx
+```
+
+This branch is local to the installation and is not pushed to GitHub.
+
+FoamNordic is responsible for preparing and building the integrated runtime
+components, including the SmartSim-related components.
 
 ---
 
 ## 3. Fixed Module Configuration
 
-The installer selects modules automatically according to the detected architecture.
+The installer selects modules according to the detected architecture.
 
 ### x86_64 CPU
 
@@ -134,9 +143,9 @@ CUDA:
 cuda/12.9.1
 ```
 
-### OpenFOAM integration
+### Optional OpenFOAM integration
 
-The optional OpenFOAM build uses:
+The OpenFOAM build uses:
 
 ```text
 GCC:
@@ -151,7 +160,7 @@ openfoam/2506
 openfoam/2512
 ```
 
-The OpenFOAM integration is built only when:
+OpenFOAM integration is built only when:
 
 ```text
 ENV_ARCH=x64
@@ -173,41 +182,57 @@ The installer asks for:
 1. CSC project number
 2. Project user directory
 3. Environment nickname
-4. Optional PySR/Julia installation
+4. Optional PySR and Julia installation
 5. Optional OpenFOAM integration on `x86_64`
-6. Number of parallel build jobs
+6. OpenFOAM version, if enabled
+7. Package-cache mode
+8. Whether to reuse an existing package cache
+9. Whether to keep the package cache
+10. Number of parallel build jobs
 
 The project number is entered twice for verification.
 
-The PySR choice is stored in:
+The installer stores the identity file at:
 
 ```text
-$PYTHON_ROOT/install-options-$ENV_ARCH.sh
+$HOME/.config/csc-hpc/identity.sh
+```
+
+Example:
+
+```bash
+export CSC_PROJECT="project_2015384"
+export PROJECT_USER_DIR="Hanseul"
+export ENV_NICKNAME="foamnordic"
+```
+
+The architecture-specific installation options are stored at:
+
+```text
+$PYTHON_ROOT/install-options-x64.sh
+$PYTHON_ROOT/install-options-arm64.sh
 ```
 
 Example:
 
 ```bash
 export INSTALL_PYSR="yes"
+export SMARTSIM_CACHE_MODE="archive"
+export SMARTSIM_CACHE_KEEP="yes"
 ```
 
-The OpenFOAM choice is stored in:
+Runtime configuration is stored at:
 
 ```text
-$PYTHON_ROOT/runtime-$ENV_ARCH.sh
-```
-
-Example:
-
-```bash
-export SMARTSIM_OPENFOAM_ENABLED="yes"
+$PYTHON_ROOT/runtime-x64.sh
+$PYTHON_ROOT/runtime-arm64.sh
 ```
 
 ---
 
 ## 5. Parallel Build Jobs
 
-The installer automatically selects a safe build parallelism value.
+The installer selects a safe build parallelism value.
 
 When running inside Slurm:
 
@@ -230,16 +255,16 @@ export CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS"
 export WM_NCOMPPROCS="$BUILD_JOBS"
 ```
 
-Julia uses a maximum of eight threads:
+Julia uses a maximum of eight build threads:
 
 ```bash
 export JULIA_NUM_THREADS="$JULIA_BUILD_THREADS"
 ```
 
-The installer also supports static checking:
+The installer supports static checking:
 
 ```bash
-./smartsim-python.sh --check
+./python-install.sh --check
 ```
 
 This runs:
@@ -252,7 +277,7 @@ This runs:
 
 ## 6. Directory Layout
 
-The installer creates the following structure:
+The installer creates a structure similar to:
 
 ```text
 /scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities/
@@ -268,36 +293,41 @@ The installer creates the following structure:
 ├── OpenFOAM/
 │   └── OpenFOAM-v2412/
 └── Python/
-    └── PythonSmartSim/
-        ├── base4SmartSim.yml
-        ├── requirements.in
-        ├── requirements-x64.txt
-        ├── requirements-arm64.txt
-        ├── julia-environment-x64.txt
-        ├── julia-environment-arm64.txt
-        ├── install-options-x64.sh
-        ├── install-options-arm64.sh
-        ├── runtime-x64.sh
-        ├── runtime-arm64.sh
-        ├── extra4SmartSim.sh
-        ├── update4SmartSim.sh
-        ├── jupyter-kernel-x64.sh
-        ├── jupyter-kernel-arm64.sh
-        ├── logs/
-        │   ├── install-*.log
-        │   └── step-*.log
-        ├── src/
-        │   └── SmartSim-CSC/
-        └── envs/
-            ├── <nickname>-3.12-x64/
-            └── <nickname>-3.12-arm64/
+    ├── base4SmartSim.yml
+    ├── requirements.in
+    ├── requirements-x64.txt
+    ├── requirements-arm64.txt
+    ├── install-options-x64.sh
+    ├── install-options-arm64.sh
+    ├── runtime-x64.sh
+    ├── runtime-arm64.sh
+    ├── cache4SmartSim.sh
+    ├── extra4SmartSim.sh
+    ├── update4SmartSim.sh
+    ├── jupyter-kernel-x64.sh
+    ├── jupyter-kernel-arm64.sh
+    ├── src/
+    │   └── FoamNordic/
+    ├── envs/
+    │   ├── <nickname>-3.12-x64/
+    │   └── <nickname>-3.12-arm64/
+    └── logs/
+        ├── install-*.log
+        └── step-*.log
 ```
 
-The paths are architecture-specific. Do not mix `x64` and `arm64` environments, native libraries, or build directories.
+Architecture-specific environments and native libraries must not be mixed.
+
+Do not use:
+
+- an `x64` environment on `aarch64`
+- an `arm64` environment on `x86_64`
+- native SmartRedis libraries built for another architecture
+- an OpenFOAM build created for another architecture
 
 ---
 
-## 7. Tykky Environment
+## 7. Python Environment
 
 The base Tykky environment contains:
 
@@ -316,128 +346,143 @@ dependencies:
   - ninja
 ```
 
-The Tykky post-install script performs the following actions:
+After the base environment is created, the installer:
 
-- Installs `uv`
-- Installs the ordinary Python requirements
-- Installs FoamPilot from the pinned SmartSim-CSC checkout
-- Optionally installs and prepares PySR/Julia
-- Clones the pinned SmartSim-CSC repository
-- Force-resets the local `foampilot-install` branch to the pinned commit
-- Installs the SmartSim runtime through the FoamPilot CLI
-- Restores the ordinary Python requirements
-- Runs `uv pip check`
-- Records installed package versions
+1. Installs `uv`
+2. Installs the ordinary Python requirements
+3. Installs FoamNordic from the configured source reference
+4. Optionally prepares PySR and Julia
+5. Runs the FoamNordic build
+6. Builds the native SmartRedis library
+7. Optionally builds the OpenFOAM integration
+8. Runs validation checks
+9. Records installed package versions
 
-FoamPilot is installed from the same immutable SmartSim-CSC commit:
+FoamNordic is installed from the local checkout:
 
 ```bash
 uv pip install \
-    --link-mode=copy \
     --no-deps \
-    "git+${SMARTSIM_CSC_REPO}@${SMARTSIM_CSC_REF}#subdirectory=components/foampilot"
+    --editable "$FOAMNORDIC_DIR"
 ```
 
-The SmartSim runtime installation is delegated to FoamPilot:
+The FoamNordic build is then performed using:
 
 ```bash
-python -m foampilot.cli install runtime \
-    --repository-root "$SMARTSIM_CSC_DIR" \
-    --profile "$SMARTSIM_CSC_PROFILE" \
-    --python "$(command -v python)" \
-    --smart "$(dirname "$(command -v python)")/smart"
+foamnordic build \
+    --profile "$FOAMNORDIC_PROFILE" \
+    --smartredis-dir "$SMARTREDIS_DIR" \
+    --jobs "$BUILD_JOBS"
 ```
 
-The FoamPilot runtime command delegates to the installer contained in the pinned SmartSim-CSC repository.
+FoamNordic manages the integrated SmartSim-related components during this
+build. The installer does not separately install a SmartSim-CSC monorepo.
+
+---
 
 ## 8. Python Requirements
 
-The installer maintains:
+The installer creates:
 
 ```text
 $PYTHON_ROOT/requirements.in
 ```
 
-This file contains ordinary ML, scientific Python, visualization, notebook, and utility packages.
+This file contains scientific Python, machine learning, visualization,
+notebook, utility, and HPC packages.
 
-The following packages are intentionally managed by SmartSim-CSC rather than listed directly in `requirements.in`:
+Examples include:
+
+```text
+numpy
+pandas
+scipy
+xarray
+tensorflow==2.18.1
+torch==2.7.1
+onnx
+onnxruntime
+scikit-learn
+matplotlib
+pyvista
+ipykernel
+pytest
+submitit
+```
+
+The following components are managed through FoamNordic and should not be
+added as ordinary requirements unless required by a future FoamNordic release:
 
 ```text
 smartsim
 smartredis
 jax
 jaxlib
-RedisAI backend packages
+RedisAI-related backend packages
 ```
 
-The installer adds the following optional packages only when PySR is enabled:
+Optional PySR packages are added only when:
+
+```text
+INSTALL_PYSR=yes
+```
+
+The optional packages are:
 
 ```text
 pysr
 julia
 ```
 
-The ordinary requirements include:
-
-```text
-tensorflow==2.18.1
-torch==2.7.1
-onnx
-onnxruntime
-tf2onnx
-skl2onnx
-```
-
-TensorFlow and PyTorch are installed as regular Python packages. The RedisAI backend selection is controlled by the SmartSim-CSC profile.
-
 ---
 
-## 9. SmartSim-CSC Installation
+## 9. FoamNordic Build
 
-SmartSim-CSC installation is exposed through the FoamPilot installation interface:
+The FoamNordic build is the central build step for the integrated runtime.
 
-```bash
-python -m foampilot.cli install runtime \
-    --repository-root "$SMARTSIM_CSC_DIR" \
-    --profile "$SMARTSIM_CSC_PROFILE"
-```
-
-The profile is automatically selected:
+The architecture-specific profiles are:
 
 ```text
 x86_64  -> linux-x64-cpu
 aarch64 -> linux-arm64-gpu
 ```
 
-The runtime installation is responsible for:
+The build command is equivalent to:
 
-- Installing the SmartSim Python package
-- Installing the SmartRedis Python package
-- Building Redis
-- Building RedisAI
-- Building the selected ONNX Runtime backend
-- Building the selected JAX backend
-- Checking Python dependencies
-- Verifying runtime build artifacts
-- Running the relevant SmartSim validation
-
-FoamPilot provides the user-facing command, while the implementation remains in the pinned SmartSim-CSC repository.
-
-The selected profiles are:
-
-```toml
-[profiles.linux-x64-cpu]
-device = "cpu"
-backends = ["onnxruntime", "jax"]
+```bash
+foamnordic build \
+    --profile "$FOAMNORDIC_PROFILE" \
+    --smartredis-dir "$SMARTREDIS_DIR" \
+    --jobs "$BUILD_JOBS"
 ```
 
-and:
+When OpenFOAM is enabled, additional arguments are passed:
 
-```toml
-[profiles.linux-arm64-gpu]
-device = "cuda-12"
-backends = ["onnxruntime", "jax"]
+```bash
+foamnordic build \
+    --profile "$FOAMNORDIC_PROFILE" \
+    --smartredis-dir "$SMARTREDIS_DIR" \
+    --jobs "$BUILD_JOBS" \
+    --foam-user-dir "$OPENFOAM_USER_DIR" \
+    --openfoam-version "$OPENFOAM_VERSION"
 ```
+
+FoamNordic prepares the required integrated components, including the
+SmartSim-related runtime and native integration libraries.
+
+Display available commands:
+
+```bash
+foamnordic --help
+```
+
+Display build options:
+
+```bash
+foamnordic build --help
+```
+
+---
 
 ## 10. Optional PySR and Julia
 
@@ -450,12 +495,12 @@ INSTALL_PYSR=yes
 When enabled, the installer:
 
 1. Adds `pysr` and `julia` to `requirements.in`
-2. Creates a Julia depot inside the Tykky environment
-3. Creates a Julia project
+2. Creates a Julia environment inside the Python environment
+3. Creates a Julia depot
 4. Runs `juliapkg.resolve()`
-5. Instantiates and precompiles the Julia environment
+5. Instantiates and precompiles Julia packages
 6. Imports PySR
-7. Copies the packaged Julia environment to a writable project location
+7. Copies the Julia environment to a writable project location
 
 The writable runtime paths are:
 
@@ -470,38 +515,32 @@ When PySR is disabled:
 INSTALL_PYSR=no
 ```
 
-the installer:
-
-- Does not add `pysr` or `julia`
-- Does not run Julia resolution
-- Does not prepare Julia runtime directories
-- Removes stale Julia runtime directories
-- Unsets Julia-related loader variables
+the installer does not prepare Julia and removes stale architecture-specific
+Julia runtime directories.
 
 ---
 
 ## 11. Native SmartRedis Library
 
-The native SmartRedis library is required for C, C++, Fortran, and linked simulation applications.
+The native SmartRedis library is built by FoamNordic and is required for
+native C, C++, Fortran, and linked simulation applications.
 
-The architecture-specific SmartRedis root directory is:
+The architecture-specific directory is:
 
 ```text
-SMARTREDIS_DIR=$BASE_SCRATCH/SmartRedis-$ENV_ARCH
+$BASE_SCRATCH/SmartRedis-$ENV_ARCH
 ```
 
-The native build is delegated to FoamPilot:
+The build is initiated through FoamNordic:
 
 ```bash
-"$ENV_PREFIX/bin/python" -m foampilot.cli install smartredis \
-    --repository-root "$SMARTSIM_CSC_DIR" \
+foamnordic build \
+    --profile "$FOAMNORDIC_PROFILE" \
     --smartredis-dir "$SMARTREDIS_DIR" \
-    --build-jobs "$BUILD_JOBS"
+    --jobs "$BUILD_JOBS"
 ```
 
-FoamPilot copies the bundled SmartRedis source into the architecture-specific external workspace and performs a clean native build there. This prevents `x86_64` and `aarch64` CMake caches and build artifacts from sharing the same source-tree build directory.
-
-The resulting layout is:
+Expected output:
 
 ```text
 $SMARTREDIS_DIR/
@@ -513,7 +552,7 @@ $SMARTREDIS_DIR/
         └── libsmartredis-fortran.so
 ```
 
-The installation library directory is therefore either:
+The library directory is either:
 
 ```text
 $SMARTREDIS_DIR/install/lib
@@ -525,13 +564,28 @@ or:
 $SMARTREDIS_DIR/install/lib64
 ```
 
-The native library is built separately for each architecture. The installer retains a separate verification step that checks the Fortran library and its dynamic dependencies with `ldd`.
+The environment loader detects the correct directory automatically.
+
+To inspect the Fortran library:
+
+```bash
+if [ -f "$SMARTREDIS_DIR/install/lib64/libsmartredis-fortran.so" ]; then
+    ldd "$SMARTREDIS_DIR/install/lib64/libsmartredis-fortran.so"
+elif [ -f "$SMARTREDIS_DIR/install/lib/libsmartredis-fortran.so" ]; then
+    ldd "$SMARTREDIS_DIR/install/lib/libsmartredis-fortran.so"
+else
+    echo "SmartRedis Fortran library was not found."
+    exit 1
+fi
+```
+
+---
 
 ## 12. Optional OpenFOAM Integration
 
-The OpenFOAM integration is available only for the `x86_64` profile.
+OpenFOAM integration is available only on `x86_64`.
 
-The installer supports the following CSC OpenFOAM modules:
+Supported CSC OpenFOAM modules are:
 
 ```text
 openfoam/2412
@@ -539,20 +593,23 @@ openfoam/2506
 openfoam/2512
 ```
 
-The installer asks for the desired version and loads the corresponding OpenFOAM module together with:
+The integration uses:
 
 ```text
-GCC 15.2.0
-OpenMPI 5.0.10
+GCC:
+gcc/15.2.0
+
+OpenMPI:
+openmpi/5.0.10
 ```
 
-The project-scoped OpenFOAM user build location is:
+The project-scoped OpenFOAM build location is:
 
 ```text
 $BASE_SCRATCH/OpenFOAM/OpenFOAM-v$OPENFOAM_VERSION
 ```
 
-The installer prepares the CSC module environment and sets:
+When enabled, the installer sets:
 
 ```bash
 export FOAM_USER_DIR="$OPENFOAM_USER_DIR"
@@ -561,67 +618,58 @@ export FOAM_USER_APPBIN="$OPENFOAM_USER_DIR/platforms/$WM_OPTIONS/bin"
 export FOAM_USER_LIBBIN="$OPENFOAM_USER_DIR/platforms/$WM_OPTIONS/lib"
 ```
 
-The actual integration build is delegated to FoamPilot:
+The integration is built through FoamNordic:
 
 ```bash
-"$ENV_PREFIX/bin/python" -m foampilot.cli install openfoam \
-    --repository-root "$SMARTSIM_CSC_DIR" \
+foamnordic build \
+    --profile "$FOAMNORDIC_PROFILE" \
     --smartredis-dir "$SMARTREDIS_DIR" \
+    --jobs "$BUILD_JOBS" \
     --foam-user-dir "$OPENFOAM_USER_DIR" \
     --openfoam-version "$OPENFOAM_VERSION"
 ```
 
-FoamPilot locates the OpenFOAM build adapter from the pinned SmartSim-CSC checkout and builds the bundled libraries, closure models, function objects, motion solver, utilities, and launcher.
+OpenFOAM integration is automatically disabled for `aarch64`.
 
-Expected applications include:
-
-```text
-foamSmartSimSvd
-foamSmartSimSvdDBAPI
-svdToFoam
-```
-
-The OpenFOAM integration is skipped automatically for `aarch64`.
+---
 
 ## 13. Environment Loader
 
-The loader is created at:
+The installer creates:
 
 ```text
 $BASE_SCRATCH/Python4SmartSim.sh
 ```
 
-It must be sourced:
+Source it with:
 
 ```bash
 source "$BASE_SCRATCH/Python4SmartSim.sh"
 ```
 
-It must not be executed directly.
+Do not execute it directly.
 
 The loader:
 
-- Reads the identity file
+- Reads the CSC project identity
 - Detects the host architecture
-- Selects the SmartSim-CSC profile
-- Locates the Tykky environment
-- Locates the native SmartRedis installation
-- Loads the recorded compiler and CUDA modules
-- Adds the Python environment to `PATH`
-- Adds native SmartRedis libraries to `LD_LIBRARY_PATH`
-- Adds SmartRedis to `CMAKE_PREFIX_PATH`
-- Configures the optional Julia runtime
-- Configures the Jupyter kernel variables
+- Selects the FoamNordic profile
+- Locates the Python environment
+- Loads the required compiler and CUDA modules
+- Adds FoamNordic commands to `PATH`
+- Configures native SmartRedis libraries
+- Configures optional Julia paths
+- Configures the Jupyter kernel
 - Loads OpenFOAM automatically when enabled on `x64`
 
-The architecture mapping is:
+Architecture mapping:
 
 ```text
-x86_64  -> ENV_ARCH=x64,   PROFILE=linux-x64-cpu,   JAX_PLATFORMS=cpu
-aarch64 -> ENV_ARCH=arm64, PROFILE=linux-arm64-gpu, JAX_PLATFORMS=cuda
+x86_64  -> ENV_ARCH=x64,   FOAMNORDIC_PROFILE=linux-x64-cpu
+aarch64 -> ENV_ARCH=arm64, FOAMNORDIC_PROFILE=linux-arm64-gpu
 ```
 
-The loader records:
+The loader configures:
 
 ```bash
 export SMARTREDIS_DIR
@@ -640,14 +688,15 @@ export FOAM_USER_APPBIN
 export FOAM_USER_LIBBIN
 ```
 
-The loader is safe to source repeatedly because it avoids duplicate path entries.
+The loader can be sourced repeatedly without intentionally duplicating path
+entries.
 
 To suppress the normal status message:
 
 ```bash
-export SMARTSIM_ENV_QUIET=1
+export FOAMNORDIC_ENV_QUIET=1
 source "$BASE_SCRATCH/Python4SmartSim.sh"
-unset SMARTSIM_ENV_QUIET
+unset FOAMNORDIC_ENV_QUIET
 ```
 
 ---
@@ -661,30 +710,31 @@ $PYTHON_ROOT/jupyter-kernel-x64.sh
 $PYTHON_ROOT/jupyter-kernel-arm64.sh
 ```
 
-The corresponding kernel names are:
+The kernel names are:
 
 ```text
-<environment>-smartsim-x86_64
-<environment>-smartsim-aarch64
+<environment>-foamnordic-x86_64
+<environment>-foamnordic-aarch64
 ```
 
-The launcher sources the same environment loader before starting:
-
-```bash
-python -m ipykernel_launcher
-```
-
-The kernel display names are:
+The display names are:
 
 ```text
-Python 3.12 (<environment> SmartSim x86_64)
-Python 3.12 (<environment> SmartSim aarch64)
+Python 3.12 (<environment> FoamNordic x86_64)
+Python 3.12 (<environment> FoamNordic aarch64)
 ```
 
-List installed kernels with:
+List installed kernels:
 
 ```bash
 jupyter kernelspec list
+```
+
+The kernel launcher sources the FoamNordic environment loader before starting
+Python:
+
+```bash
+python -m ipykernel_launcher
 ```
 
 ---
@@ -697,99 +747,134 @@ Load the environment:
 source "$BASE_SCRATCH/Python4SmartSim.sh"
 ```
 
-The installer performs the primary stack validation through FoamPilot doctor:
+Check the Python version:
 
 ```bash
-python -m foampilot.cli doctor
+python --version
 ```
 
-The doctor checks the available installation components, including:
-
-- FoamPilot, SmartSim, SmartRedis, and JAX imports
-- The SmartSim database executable
-- The RedisAI module
-- Native SmartRedis libraries when configured
-- OpenFOAM libraries and applications when enabled
-- The bundled OpenFOAM closure model symbols
-
-The installer separately validates PySR when its optional Julia environment is enabled.
-
-For manual validation, run:
+Check FoamNordic:
 
 ```bash
-foampilot doctor
+python -c "import foamnordic"
 ```
 
-The dependency set can also be checked with:
+Display the installed FoamNordic source location:
+
+```bash
+python - <<'PY'
+from pathlib import Path
+import foamnordic
+
+print(Path(foamnordic.__file__).resolve())
+PY
+```
+
+Run FoamNordic validation:
+
+```bash
+foamnordic doctor
+```
+
+The doctor command validates available installation components, including
+FoamNordic imports, runtime executables, native libraries, and optional
+OpenFOAM components.
+
+Check Python dependencies:
 
 ```bash
 uv pip check
 ```
 
-Inspect the pinned SmartSim-CSC versions with:
+Display FoamNordic help:
 
 ```bash
-python "$SMARTSIM_CSC_DIR/scripts/check_versions.py"
+foamnordic --help
 ```
 
-Inspect the selected stack profile with:
+Display build help:
 
 ```bash
-python "$SMARTSIM_CSC_DIR/scripts/stack_config.py" \
-    --profile "$SMARTSIM_CSC_PROFILE"
+foamnordic build --help
 ```
 
-For direct native SmartRedis dependency inspection:
+If PySR is enabled:
 
 ```bash
-if [ -f "$SMARTREDIS_DIR/install/lib64/libsmartredis-fortran.so" ]; then
-    ldd "$SMARTREDIS_DIR/install/lib64/libsmartredis-fortran.so"
-elif [ -f "$SMARTREDIS_DIR/install/lib/libsmartredis-fortran.so" ]; then
-    ldd "$SMARTREDIS_DIR/install/lib/libsmartredis-fortran.so"
-else
-    echo "SmartRedis Fortran library was not found."
-    exit 1
-fi
+python -c "import pysr; print(pysr.__version__)"
 ```
 
-## 16. Installation Logs
+For OpenFOAM-enabled installations, inspect application dependencies:
 
-The installer writes logs under:
+```bash
+ldd "$FOAM_USER_APPBIN/foamSmartSimSvdDBAPI"
+```
+
+The output must not contain:
 
 ```text
-$PYTHON_ROOT/logs/
+not found
 ```
 
-The combined installation log has the format:
+---
+
+## 16. Package Cache
+
+The installer supports three cache modes.
+
+### Archive
 
 ```text
-install-YYYYMMDD-HHMMSS-<architecture>.log
+archive
 ```
 
-Each installation step has a separate log:
+Stores the cache as one archive on scratch. This is generally preferred on
+Lustre because it reduces the number of persistent files.
+
+### Directory
 
 ```text
-step-01-<architecture>.log
-step-02-<architecture>.log
-...
-step-11-<architecture>.log
+directory
 ```
 
-There are eleven installation steps:
+Stores cache contents in a normal directory. This is simpler but may create a
+large number of files.
 
-1. Writing identity and install options
-2. Creating configuration and build scripts
-3. Building the Tykky Python environment
-4. Preparing the writable Julia runtime
-5. Installing native SmartRedis through FoamPilot
-6. Verifying native SmartRedis
-7. Installing the OpenFOAM integration through FoamPilot
-8. Creating loader and update tooling
-9. Registering the Jupyter kernel
-10. Validating the installation with FoamPilot doctor
-11. Finalising the installation
+### Disabled
 
-When a step fails, its log is printed automatically.
+```text
+none
+```
+
+Disables package caching.
+
+The cache includes:
+
+- Conda packages required by `base4SmartSim.yml`
+- PyPI wheels and source distributions required by `requirements.in`
+
+The cache does not include:
+
+- FoamNordic source repositories
+- DataGraph source
+- Native SmartRedis build output
+- OpenFOAM build output
+- Compiled FoamNordic artifacts
+
+Version-control dependencies and compiled components are re-fetched or
+rebuilt when required.
+
+Inspect the cache:
+
+```bash
+smartsim-update --cache-info
+```
+
+Clear the cache:
+
+```bash
+smartsim-update --clear-cache
+```
 
 ---
 
@@ -801,22 +886,31 @@ The installer creates:
 $HOME/bin/smartsim-update
 ```
 
-The command updates ordinary packages listed in:
-
-```text
-$PYTHON_ROOT/requirements.in
-```
-
-Examples:
+Update ordinary packages with:
 
 ```bash
 smartsim-update pydantic
+```
+
+Update multiple packages:
+
+```bash
 smartsim-update loguru pyinstrument
 ```
 
-The command refuses to update packages managed by SmartSim-CSC:
+The updater also supports:
+
+```bash
+smartsim-update --cache-info
+smartsim-update --clear-cache
+smartsim-update --fresh <package>
+smartsim-update --no-keep-cache <package>
+```
+
+Packages managed by FoamNordic cannot be updated using this command:
 
 ```text
+foamnordic
 smartsim
 smartredis
 jax
@@ -825,15 +919,20 @@ jax-cuda12-plugin
 jax-cuda12-pjrt
 ```
 
-It also refuses `pysr` and `julia` when PySR was disabled for the current architecture.
+PySR and Julia can only be updated when:
 
-The updater does not rebuild Redis, RedisAI, SmartSim, SmartRedis, or OpenFOAM.
+```text
+INSTALL_PYSR=yes
+```
 
-To update the SmartSim-CSC stack itself:
+The updater does not rebuild the full FoamNordic runtime or OpenFOAM
+integration.
 
-1. Edit `SMARTSIM_CSC_REF` in `smartsim-python.sh`
-2. Select a new validated tag or commit
-3. Run a full rebuild for the target architecture
+To update FoamNordic itself:
+
+1. Change `FOAMNORDIC_REF` in the installer.
+2. Select a validated FoamNordic tag or commit.
+3. Perform a clean rebuild.
 
 ---
 
@@ -845,7 +944,7 @@ For a clean architecture-specific rebuild:
 rm -rf "$ENV_PREFIX"
 rm -rf "$TMP_BUILD_DIR"
 rm -rf "$SMARTREDIS_DIR"
-rm -rf "$SMARTSIM_CSC_DIR"
+rm -rf "$FOAMNORDIC_DIR"
 rm -rf "$BASE_SCRATCH/.julia_env_runtime_$ENV_ARCH"
 rm -rf "$BASE_SCRATCH/.julia_depot_runtime_$ENV_ARCH"
 ```
@@ -856,13 +955,15 @@ For a clean OpenFOAM rebuild:
 rm -rf "$OPENFOAM_USER_DIR"
 ```
 
-Then execute the installer again:
+Run the installer again:
 
 ```bash
-./smartsim-python.sh
+./python-install.sh
 ```
 
-Changing `INSTALL_PYSR` requires regenerating the Tykky environment because adding or removing Julia packages is not handled reliably by an ordinary package update.
+Changing `INSTALL_PYSR` requires rebuilding the Tykky environment because
+adding or removing Julia dependencies is not handled reliably by an ordinary
+package update.
 
 ---
 
@@ -870,7 +971,7 @@ Changing `INSTALL_PYSR` requires regenerating the Tykky environment because addi
 
 ### Unsupported architecture
 
-Check:
+Check the architecture:
 
 ```bash
 uname -m
@@ -883,33 +984,39 @@ x86_64
 aarch64
 ```
 
-### Tykky build failure
+### FoamNordic source checkout failure
 
-Check the per-step log:
+Check repository access:
+
+```bash
+git ls-remote "$FOAMNORDIC_REPO"
+```
+
+Ensure that `FOAMNORDIC_REF` points to a real tag or commit.
+
+### FoamNordic build failure
+
+Inspect the latest step log:
 
 ```bash
 ls -lt "$PYTHON_ROOT/logs/"
 ```
 
-The failed step log is also printed automatically by the installer.
+The installer also prints the failed step log automatically.
 
-### SmartSim-CSC checkout failure
+### Missing FoamNordic command
 
-Check that the repository is reachable:
+Reload the environment:
 
 ```bash
-git ls-remote "$SMARTSIM_CSC_REPO"
+source "$BASE_SCRATCH/Python4SmartSim.sh"
 ```
 
-The configured commit must exist in the repository.
-
-### Profile lookup failure
-
-Inspect the profile:
+Check:
 
 ```bash
-python "$SMARTSIM_CSC_DIR/scripts/stack_config.py" \
-    --profile "$SMARTSIM_CSC_PROFILE"
+command -v foamnordic
+foamnordic --help
 ```
 
 ### Missing native SmartRedis library
@@ -920,65 +1027,52 @@ Check:
 find "$SMARTREDIS_DIR/install" -type f | sort
 ```
 
-Ensure that the correct compiler and CMake modules are loaded before rebuilding.
+Ensure that the correct compiler and CMake modules are loaded before
+rebuilding.
 
 ### Missing Julia runtime
 
-If PySR is enabled but the loader reports a missing writable Julia environment, rebuild or repeat the Julia runtime preparation step.
+If PySR is enabled, check:
 
-Expected directories:
-
-```text
-$BASE_SCRATCH/.julia_env_runtime_$ENV_ARCH
-$BASE_SCRATCH/.julia_depot_runtime_$ENV_ARCH
+```bash
+ls -ld "$BASE_SCRATCH/.julia_env_runtime_$ENV_ARCH"
+ls -ld "$BASE_SCRATCH/.julia_depot_runtime_$ENV_ARCH"
 ```
+
+If either directory is missing, perform a clean PySR-enabled rebuild.
 
 ### Missing OpenFOAM commands
 
-Check that OpenFOAM was enabled:
+Check whether OpenFOAM was enabled:
 
 ```bash
-grep SMARTSIM_OPENFOAM_ENABLED \
+grep FOAMNORDIC_OPENFOAM_ENABLED \
     "$PYTHON_ROOT/runtime-x64.sh"
 ```
 
-Then reload:
+Reload the environment:
 
 ```bash
 source "$BASE_SCRATCH/Python4SmartSim.sh"
 ```
 
-OpenFOAM support is available only on `x86_64`.
-
-### Missing OpenFOAM shared libraries
-
-Check:
-
-```bash
-ldd "$FOAM_USER_APPBIN/foamSmartSimSvdDBAPI"
-```
-
-The output must not contain:
-
-```text
-not found
-```
+OpenFOAM integration is available only on `x86_64`.
 
 ### Architecture mismatch
 
-Do not use:
+Do not mix:
 
-- an `x64` environment on `aarch64`
-- an `arm64` environment on `x86_64`
-- native SmartRedis libraries built for another architecture
-- an OpenFOAM build from another architecture
+- `x64` and `arm64` Python environments
+- native libraries from different architectures
+- OpenFOAM builds from different architectures
+- architecture-specific runtime configuration files
 
 ### Source versus execution
 
 The installer is executed:
 
 ```bash
-./smartsim-python.sh
+./python-install.sh
 ```
 
 The environment loader is sourced:
@@ -1001,37 +1095,28 @@ Check the environment:
 
 ```bash
 python --version
-python -c "import smartsim, smartredis, foampilot"
+command -v foamnordic
+python -c "import foamnordic"
 ```
 
-Run ordinary package updates:
+Display FoamNordic help:
+
+```bash
+foamnordic --help
+```
+
+Run validation:
+
+```bash
+foamnordic doctor
+```
+
+Update ordinary Python packages:
 
 ```bash
 smartsim-update <package>
 ```
 
-Run SmartSim validation:
-
-```bash
-smart validate --device cpu
-```
-
-For the GPU profile:
-
-```bash
-smart validate --device gpu
-```
-
-The SmartSim-CSC stack is controlled by the pinned repository commit in:
-
-```bash
-smartsim-python.sh
-```
-
-The native SmartRedis library is installed separately under:
-
-```text
-$BASE_SCRATCH/SmartRedis-$ENV_ARCH
-```
-
-The optional OpenFOAM integration is installed only when explicitly enabled on `x86_64`.
+The FoamNordic runtime, SmartSim-related components, native SmartRedis
+libraries, and optional OpenFOAM integration are built and managed through
+FoamNordic.
