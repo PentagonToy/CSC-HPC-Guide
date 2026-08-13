@@ -393,7 +393,10 @@ run_step() {
         "$step_start_seconds"
 
     set +e
-    "$@" >> "$step_log" 2>&1
+    (
+        set -Eeuo pipefail
+        "$@"
+    ) >> "$step_log" 2>&1
     exit_code=$?
     set -e
 
