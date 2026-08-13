@@ -31,7 +31,7 @@ set -Eeuo pipefail
 # USER CONFIGURATION
 # ================================================================
 readonly FOAMNORDIC_REPO="https://github.com/PentagonToy/FoamNordic.git"
-readonly FOAMNORDIC_REF="0000000000000000000000000000000000000000"
+readonly FOAMNORDIC_REF="645b12de0f8e4df7dec4a7b4b8326933aede34ce"
 readonly FOAMNORDIC_VERSION="1.0.0"
 readonly TYKKY_MINIFORGE_VERSION="26.3.2-2"
 
