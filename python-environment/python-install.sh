@@ -1542,6 +1542,26 @@ uv pip install \
     --link-mode=copy \
     --editable "$FOAMNORDIC_DIR"
 
+
+FOAMNORDIC_VERSION="$(
+    python - <<'PY_VERSION'
+from importlib.metadata import version
+
+print(version("foamnordic"))
+PY_VERSION
+)"
+export FOAMNORDIC_VERSION
+
+rm -rf "$FOAMNORDIC_DIR/foamnordic/_vendor/smartredis/build"
+
+python -m pip install \
+    --no-deps \
+    "$FOAMNORDIC_DIR/foamnordic/_vendor/smartredis"
+
+python -m pip install \
+    --no-deps \
+    "$FOAMNORDIC_DIR/foamnordic/_vendor/smartsim"
+
 uv pip check
 
 python - <<'PY'
@@ -1686,6 +1706,7 @@ step_build_foamnordic() {
     build_arguments=(
         build
         --profile "$FOAMNORDIC_PROFILE"
+        --skip-python-packages
         --jobs "$BUILD_JOBS"
     )
 
@@ -1695,6 +1716,7 @@ step_build_foamnordic() {
         )
     fi
 
+    PYTHONNOUSERSITE=1 \
     SMARTREDIS_CC="$smartredis_cc" \
     SMARTREDIS_CXX="$smartredis_cxx" \
     SMARTREDIS_FC="$smartredis_fc" \
