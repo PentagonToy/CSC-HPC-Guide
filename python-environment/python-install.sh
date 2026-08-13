@@ -1457,6 +1457,7 @@ set -Eeuo pipefail
 : "${PIP_CACHE_DIR:=$CW_BUILD_TMPDIR/.pip_cache}"
 : "${UV_CACHE_DIR:=$CW_BUILD_TMPDIR/.uv_cache}"
 
+export PYTHONNOUSERSITE=1
 export TMPDIR="$CW_BUILD_TMPDIR"
 export PIP_CACHE_DIR UV_CACHE_DIR
 export UV_LINK_MODE=copy
@@ -1538,7 +1539,7 @@ git -C "$FOAMNORDIC_DIR" switch \
 git -C "$FOAMNORDIC_DIR" clean -ffdx
 
 uv pip install \
-    --no-deps \
+    --link-mode=copy \
     --editable "$FOAMNORDIC_DIR"
 
 uv pip check
