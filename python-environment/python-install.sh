@@ -9,7 +9,8 @@
 #   - safe parallel compilation based on Slurm allocation or user override
 #   - package cache limited to base4FoamNordic.yml and requirements.in
 #   - archive, directory, or disabled cache storage modes
-#   - optional PySR/Julia and CSC OpenFOAM module integration
+#   - optional PySR/Julia and OpenFOAM integration
+#     (CSC modules on x86_64, FoamNordic v2512 runtime asset on aarch64)
 #   - Tykky environment, FoamNordic runtime, loader, updater, and Jupyter kernel
 #
 # Cache policy:
@@ -31,7 +32,7 @@ set -Eeuo pipefail
 # USER CONFIGURATION
 # ================================================================
 readonly FOAMNORDIC_REPO="https://github.com/PentagonToy/FoamNordic.git"
-readonly FOAMNORDIC_REF="7a1ada57790d9e0a0ed227aab88980ba41d7edad"
+readonly FOAMNORDIC_REF="e4a6c7c96c818b4ff9ccfcf938b534de1af8d4da"
 readonly TYKKY_MINIFORGE_VERSION="26.3.2-2"
 
 readonly X64_GCC_MODULE="gcc/13.4.0"
@@ -43,6 +44,13 @@ readonly ARM64_CUDA_MODULE="cuda/12.9.1"
 
 readonly OPENFOAM_GCC_MODULE="gcc/15.2.0"
 readonly OPENFOAM_MPI_MODULE="openmpi/5.0.10"
+
+readonly ARM64_OPENFOAM_VERSION="2512"
+readonly ARM64_OPENFOAM_MPI_MODULE="openmpi/5.0.10"
+readonly ARM64_OPENFOAM_TAG="runtime/openfoam-v2512-roihu-arm64"
+readonly ARM64_OPENFOAM_ASSET="openfoam-v2512-roihu-arm64.tar.zst"
+readonly ARM64_OPENFOAM_SHA256="5fcff0eb407ba355059223186a7832d29f0067c4db105d8d961e4904af186b0f"
+readonly ARM64_OPENFOAM_URL="https://github.com/PentagonToy/FoamNordic/releases/download/runtime%2Fopenfoam-v2512-roihu-arm64/$ARM64_OPENFOAM_ASSET"
 
 # ================================================================
 # GLOBAL STATE
@@ -1087,14 +1095,26 @@ collect_configuration() {
 
         if [ "$BUILD_OPENFOAM" = "yes" ]; then
             prompt_openfoam_version
+            OPENFOAM_PROVIDER="csc-module"
         else
             OPENFOAM_VERSION=""
             OPENFOAM_MODULE=""
+            OPENFOAM_PROVIDER=""
         fi
     else
-        BUILD_OPENFOAM="no"
-        OPENFOAM_VERSION=""
-        OPENFOAM_MODULE=""
+        prompt_yes_no \
+            "Build the FoamNordic integration with the Roihu ARM64 OpenFOAM v2512 runtime? [Y/n]: " \
+            "yes" BUILD_OPENFOAM
+
+        if [ "$BUILD_OPENFOAM" = "yes" ]; then
+            OPENFOAM_VERSION="$ARM64_OPENFOAM_VERSION"
+            OPENFOAM_MODULE=""
+            OPENFOAM_PROVIDER="foamnordic-asset"
+        else
+            OPENFOAM_VERSION=""
+            OPENFOAM_MODULE=""
+            OPENFOAM_PROVIDER=""
+        fi
     fi
 
     echo
@@ -1116,8 +1136,9 @@ collect_configuration() {
         "FoamNordic profile" "$FOAMNORDIC_PROFILE" \
         "PySR / Julia" "$INSTALL_PYSR" \
         "OpenFOAM" "$BUILD_OPENFOAM" \
+        "OpenFOAM provider" "${OPENFOAM_PROVIDER:-none}" \
         "OpenFOAM version" "${OPENFOAM_VERSION:+v$OPENFOAM_VERSION}" \
-        "OpenFOAM module" "$OPENFOAM_MODULE" \
+        "OpenFOAM module" "${OPENFOAM_MODULE:-}" \
         "Cache mode" "$CACHE_MODE" \
         "Cache location" "$(foamnordic_cache_location)" \
         "Reuse cache" "$CACHE_REUSE" \
@@ -1153,7 +1174,10 @@ set_global_paths() {
     export FOAMNORDIC_DIR="$PYTHON_ROOT/src/FoamNordic"
     export FOAMNORDIC_PROFILE
     export FOAMNORDIC_RUNTIME_DIR="$ARCH_ROOT/runtime"
-    export OPENFOAM_MODULE
+    export OPENFOAM_MODULE OPENFOAM_PROVIDER
+    export ARM64_OPENFOAM_VERSION ARM64_OPENFOAM_MPI_MODULE
+    export ARM64_OPENFOAM_TAG ARM64_OPENFOAM_ASSET
+    export ARM64_OPENFOAM_SHA256 ARM64_OPENFOAM_URL
     export TMP_BUILD_DIR="$ARCH_ROOT/tykky"
 
     mkdir -p \
@@ -1668,12 +1692,154 @@ PY
     mkdir -p "$JULIA_DEPOT_RUNTIME"
 }
 
+prepare_arm64_openfoam_runtime() {
+    local runtime_root
+    local openfoam_root
+    local archive_path
+    local partial_path
+    local actual_sha256
+
+    runtime_root="$FOAMNORDIC_RUNTIME_DIR/$FOAMNORDIC_PROFILE/openfoam/v$ARM64_OPENFOAM_VERSION"
+    openfoam_root="$runtime_root/OpenFOAM-v$ARM64_OPENFOAM_VERSION"
+    archive_path="$TMP_BUILD_DIR/$ARM64_OPENFOAM_ASSET"
+    partial_path="$archive_path.partial"
+
+    if [ -f "$openfoam_root/META-INFO/api-info" ] \
+        && [ -f "$openfoam_root/etc/bashrc" ] \
+        && [ -x "$openfoam_root/wmake/wmake" ] \
+        && [ -x "$openfoam_root/wmake/wclean" ]; then
+        printf 'Reusing OpenFOAM ARM64 runtime: %s\n' "$runtime_root"
+        OPENFOAM_RUNTIME_ROOT="$runtime_root"
+        export OPENFOAM_RUNTIME_ROOT
+        return 0
+    fi
+
+    printf 'Installing OpenFOAM v%s ARM64 runtime asset.\n' \
+        "$ARM64_OPENFOAM_VERSION"
+    printf 'Asset tag: %s\n' "$ARM64_OPENFOAM_TAG"
+    printf 'Asset URL: %s\n' "$ARM64_OPENFOAM_URL"
+
+    rm -rf "$runtime_root"
+    rm -f "$archive_path" "$partial_path"
+    mkdir -p "$runtime_root" "$TMP_BUILD_DIR"
+
+    if command -v curl >/dev/null 2>&1; then
+        curl \
+            --fail \
+            --location \
+            --retry 3 \
+            --output "$partial_path" \
+            "$ARM64_OPENFOAM_URL"
+    elif command -v wget >/dev/null 2>&1; then
+        wget \
+            --tries=3 \
+            --output-document="$partial_path" \
+            "$ARM64_OPENFOAM_URL"
+    else
+        "$ENV_PREFIX/bin/python" - \
+            "$ARM64_OPENFOAM_URL" \
+            "$partial_path" <<'PY_DOWNLOAD'
+import shutil
+import sys
+import urllib.request
+
+url, target = sys.argv[1:]
+with urllib.request.urlopen(url) as response, open(target, "wb") as output:
+    shutil.copyfileobj(response, output)
+PY_DOWNLOAD
+    fi
+
+    mv -f "$partial_path" "$archive_path"
+
+    actual_sha256="$(sha256sum "$archive_path" | awk '{print $1}')"
+
+    if [ "$actual_sha256" != "$ARM64_OPENFOAM_SHA256" ]; then
+        echo "OpenFOAM ARM64 runtime checksum mismatch."
+        echo "Expected: $ARM64_OPENFOAM_SHA256"
+        echo "Actual:   $actual_sha256"
+        rm -f "$archive_path"
+        return 1
+    fi
+
+    zstd -dc "$archive_path" \
+        | tar \
+            -x \
+            -C "$runtime_root" \
+            --strip-components=1 \
+            -f -
+
+    rm -f "$archive_path"
+
+    if [ ! -f "$openfoam_root/META-INFO/api-info" ]; then
+        echo "OpenFOAM META-INFO was not found after extraction."
+        return 1
+    fi
+
+    if [ ! -f "$openfoam_root/etc/bashrc" ]; then
+        echo "OpenFOAM bashrc was not found after extraction."
+        return 1
+    fi
+
+    if [ ! -x "$openfoam_root/wmake/wmake" ]; then
+        echo "OpenFOAM wmake was not found after extraction."
+        return 1
+    fi
+
+    if [ ! -x "$openfoam_root/wmake/wclean" ]; then
+        echo "OpenFOAM wclean was not found after extraction."
+        return 1
+    fi
+
+    OPENFOAM_RUNTIME_ROOT="$runtime_root"
+    export OPENFOAM_RUNTIME_ROOT
+
+    printf 'OpenFOAM ARM64 runtime installed: %s\n' "$runtime_root"
+}
+
+load_arm64_openfoam_runtime() {
+    local bashrc
+
+    : "${OPENFOAM_RUNTIME_ROOT:?OPENFOAM_RUNTIME_ROOT is not set}"
+
+    module --force purge
+    module load "$ARM64_GCC_MODULE"
+    module load "$ARM64_OPENFOAM_MPI_MODULE"
+    module load "$ARM64_CUDA_MODULE"
+
+    bashrc="$OPENFOAM_RUNTIME_ROOT/OpenFOAM-v$ARM64_OPENFOAM_VERSION/etc/bashrc"
+
+    set +u
+
+    # shellcheck disable=SC1090
+    source "$bashrc" \
+        WM_COMPILER=Gcc \
+        WM_PRECISION_OPTION=DP \
+        WM_LABEL_SIZE=32 \
+        WM_COMPILE_OPTION=Opt \
+        WM_MPLIB=SYSTEMOPENMPI \
+        || {
+            source_status=$?
+            set -u
+            return "$source_status"
+        }
+
+    set -u
+
+    if [ "${WM_PROJECT_VERSION:-}" != "v$ARM64_OPENFOAM_VERSION" ]; then
+        echo "Loaded ARM64 OpenFOAM runtime does not match the expected version."
+        echo "Expected: v$ARM64_OPENFOAM_VERSION"
+        echo "Loaded:   ${WM_PROJECT_VERSION:-not loaded}"
+        return 1
+    fi
+}
+
 step_build_foamnordic() {
     local smartredis_cc
     local smartredis_cxx
     local smartredis_fc
     local runtime_config
     local runtime_config_tmp
+    local openfoam_runtime_root=""
     local -a build_arguments
 
     module --force purge
@@ -1689,18 +1855,31 @@ step_build_foamnordic() {
 
     rm -f "$runtime_config" "$runtime_config_tmp"
 
-    if [ "$ENV_ARCH" = "x64" ] && [ "$BUILD_OPENFOAM" = "yes" ]; then
-        module --force purge
-        module load "$OPENFOAM_GCC_MODULE"
-        module load "$OPENFOAM_MPI_MODULE"
-        module load "$OPENFOAM_MODULE"
+    if [ "$BUILD_OPENFOAM" = "yes" ]; then
+        case "$OPENFOAM_PROVIDER" in
+            csc-module)
+                module --force purge
+                module load "$OPENFOAM_GCC_MODULE"
+                module load "$OPENFOAM_MPI_MODULE"
+                module load "$OPENFOAM_MODULE"
 
-        if [ "${WM_PROJECT_VERSION:-}" != "v$OPENFOAM_VERSION" ]; then
-            echo "Loaded OpenFOAM version does not match the selection."
-            echo "Expected: v$OPENFOAM_VERSION"
-            echo "Loaded:   ${WM_PROJECT_VERSION:-not loaded}"
-            return 1
-        fi
+                if [ "${WM_PROJECT_VERSION:-}" != "v$OPENFOAM_VERSION" ]; then
+                    echo "Loaded OpenFOAM version does not match the selection."
+                    echo "Expected: v$OPENFOAM_VERSION"
+                    echo "Loaded:   ${WM_PROJECT_VERSION:-not loaded}"
+                    return 1
+                fi
+                ;;
+            foamnordic-asset)
+                prepare_arm64_openfoam_runtime
+                openfoam_runtime_root="$OPENFOAM_RUNTIME_ROOT"
+                load_arm64_openfoam_runtime
+                ;;
+            *)
+                echo "Unknown OpenFOAM provider: $OPENFOAM_PROVIDER"
+                return 1
+                ;;
+        esac
     fi
 
     build_arguments=(
@@ -1731,8 +1910,11 @@ export FOAMNORDIC_CMAKE_MODULE="$CMAKE_MODULE"
 export FOAMNORDIC_CUDA_MODULE="$CUDA_MODULE"
 export FOAMNORDIC_OPENFOAM_GCC_MODULE="$OPENFOAM_GCC_MODULE"
 export FOAMNORDIC_OPENFOAM_MPI_MODULE="$OPENFOAM_MPI_MODULE"
+export FOAMNORDIC_OPENFOAM_ARM64_MPI_MODULE="$ARM64_OPENFOAM_MPI_MODULE"
 export FOAMNORDIC_OPENFOAM_MODULE="$OPENFOAM_MODULE"
+export FOAMNORDIC_OPENFOAM_PROVIDER="$OPENFOAM_PROVIDER"
 export FOAMNORDIC_OPENFOAM_VERSION="$OPENFOAM_VERSION"
+export FOAMNORDIC_OPENFOAM_RUNTIME_ROOT="$openfoam_runtime_root"
 export FOAMNORDIC_PYSR_ENABLED="$INSTALL_PYSR"
 export FOAMNORDIC_OPENFOAM_ENABLED="$BUILD_OPENFOAM"
 export FOAMNORDIC_BUILD_JOBS="$BUILD_JOBS"
@@ -1858,17 +2040,59 @@ path_prepend() {
     esac
 }
 
-if [ "$FOAMNORDIC_OPENFOAM_ENABLED" = "yes" ] && [ "$ENV_ARCH" = "x64" ]; then
-    if command -v module >/dev/null 2>&1; then
-        module --force purge
-        module load \
-            "$FOAMNORDIC_OPENFOAM_GCC_MODULE" \
-            "$FOAMNORDIC_OPENFOAM_MPI_MODULE" \
-            "$FOAMNORDIC_OPENFOAM_MODULE"
-    fi
+if [ "$FOAMNORDIC_OPENFOAM_ENABLED" = "yes" ]; then
+    case "${FOAMNORDIC_OPENFOAM_PROVIDER:-}" in
+        csc-module)
+            if command -v module >/dev/null 2>&1; then
+                module --force purge
+                module load \
+                    "$FOAMNORDIC_OPENFOAM_GCC_MODULE" \
+                    "$FOAMNORDIC_OPENFOAM_MPI_MODULE" \
+                    "$FOAMNORDIC_OPENFOAM_MODULE"
+            fi
+            ;;
+        foamnordic-asset)
+            if [ ! -f "$FOAMNORDIC_OPENFOAM_RUNTIME_ROOT/OpenFOAM-v$FOAMNORDIC_OPENFOAM_VERSION/etc/bashrc" ]; then
+                echo "FoamNordic OpenFOAM runtime asset not found:"
+                echo "    $FOAMNORDIC_OPENFOAM_RUNTIME_ROOT"
+                return 1
+            fi
+
+            if command -v module >/dev/null 2>&1; then
+                module --force purge
+                module load \
+                    "$FOAMNORDIC_GCC_MODULE" \
+                    "$FOAMNORDIC_OPENFOAM_ARM64_MPI_MODULE" \
+                    "$FOAMNORDIC_CUDA_MODULE"
+            fi
+
+            set +u
+
+            # shellcheck disable=SC1090
+            source "$FOAMNORDIC_OPENFOAM_RUNTIME_ROOT/OpenFOAM-v$FOAMNORDIC_OPENFOAM_VERSION/etc/bashrc" \
+                WM_COMPILER=Gcc \
+                WM_PRECISION_OPTION=DP \
+                WM_LABEL_SIZE=32 \
+                WM_COMPILE_OPTION=Opt \
+                WM_MPLIB=SYSTEMOPENMPI \
+                || {
+                    source_status=$?
+                    set -u
+                    return "$source_status"
+                }
+
+            set -u
+            ;;
+        *)
+            echo "Unknown FoamNordic OpenFOAM provider: ${FOAMNORDIC_OPENFOAM_PROVIDER:-unset}"
+            return 1
+            ;;
+    esac
 
     if [ "${WM_PROJECT_VERSION:-}" != "v${FOAMNORDIC_OPENFOAM_VERSION:-2512}" ]; then
-        echo "Loaded OpenFOAM module does not match the runtime configuration."
+        echo "Loaded OpenFOAM runtime does not match the runtime configuration."
+        echo "Expected: v${FOAMNORDIC_OPENFOAM_VERSION:-2512}"
+        echo "Loaded:   ${WM_PROJECT_VERSION:-not loaded}"
         return 1
     fi
 
@@ -1934,8 +2158,8 @@ export JUPYTER_KERNEL_DISPLAY="Python 3.12 ($ENV_NICKNAME FoamNordic $MACHINE_AR
 export JUPYTER_KERNEL_DIR="$HOME/.local/share/jupyter/kernels/$JUPYTER_KERNEL_NAME"
 
 if [ "${FOAMNORDIC_ENV_QUIET:-0}" != "1" ]; then
-    if [ "$FOAMNORDIC_OPENFOAM_ENABLED" = "yes" ] && [ "$ENV_ARCH" = "x64" ]; then
-        echo "FoamNordic environment loaded: $ENV_NICKNAME ($ENV_ARCH), OpenFOAM v${FOAMNORDIC_OPENFOAM_VERSION:-2512}"
+    if [ "$FOAMNORDIC_OPENFOAM_ENABLED" = "yes" ]; then
+        echo "FoamNordic environment loaded: $ENV_NICKNAME ($ENV_ARCH), OpenFOAM v${FOAMNORDIC_OPENFOAM_VERSION:-2512} (${FOAMNORDIC_OPENFOAM_PROVIDER:-unknown})"
     else
         echo "FoamNordic environment loaded: $ENV_NICKNAME ($ENV_ARCH)"
     fi
@@ -2427,6 +2651,31 @@ if os.environ.get("FOAMNORDIC_OPENFOAM_ENABLED") == "yes":
             f"{actual_foam_user_dir}"
         )
 
+    expected_version = f"v{os.environ['FOAMNORDIC_OPENFOAM_VERSION']}"
+    if os.environ.get("WM_PROJECT_VERSION") != expected_version:
+        raise RuntimeError(
+            "WM_PROJECT_VERSION does not match the FoamNordic runtime: "
+            f"{os.environ.get('WM_PROJECT_VERSION')} != {expected_version}"
+        )
+
+    if os.environ.get("FOAMNORDIC_OPENFOAM_PROVIDER") == "foamnordic-asset":
+        asset_root = Path(
+            os.environ["FOAMNORDIC_OPENFOAM_RUNTIME_ROOT"]
+        ).resolve()
+        expected_project_dir = (
+            asset_root
+            / f"OpenFOAM-{expected_version}"
+        ).resolve()
+        actual_project_dir = Path(
+            os.environ["WM_PROJECT_DIR"]
+        ).resolve()
+
+        if actual_project_dir != expected_project_dir:
+            raise RuntimeError(
+                "WM_PROJECT_DIR does not point to the ARM64 runtime asset: "
+                f"{actual_project_dir}"
+            )
+
 print("FoamNordic runtime environment validation: PASS")
 PY_RUNTIME_VALIDATION
 
@@ -2461,7 +2710,15 @@ step_finish() {
     printf 'FoamNordic ref: %s\n' "$FOAMNORDIC_REF"
 
     if [ "$BUILD_OPENFOAM" = "yes" ]; then
-        printf 'OpenFOAM module: %s\n' "$OPENFOAM_MODULE"
+        printf 'OpenFOAM provider: %s\n' "$OPENFOAM_PROVIDER"
+        printf 'OpenFOAM version: v%s\n' "$OPENFOAM_VERSION"
+
+        if [ "$OPENFOAM_PROVIDER" = "csc-module" ]; then
+            printf 'OpenFOAM module: %s\n' "$OPENFOAM_MODULE"
+        else
+            printf 'OpenFOAM runtime: %s\n' \
+                "$FOAMNORDIC_RUNTIME_DIR/$FOAMNORDIC_PROFILE/openfoam/v$OPENFOAM_VERSION"
+        fi
     fi
 
     printf 'Parallel build jobs: %s\n' "$BUILD_JOBS"
