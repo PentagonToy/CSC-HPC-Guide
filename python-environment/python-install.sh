@@ -49,7 +49,7 @@ readonly ARM64_OPENFOAM_VERSION="2512"
 readonly ARM64_OPENFOAM_MPI_MODULE="openmpi/5.0.10"
 readonly ARM64_OPENFOAM_TAG="runtime/openfoam-v2512-roihu-arm64"
 readonly ARM64_OPENFOAM_ASSET="openfoam-v2512-roihu-arm64.tar.zst"
-readonly ARM64_OPENFOAM_SHA256="5fcff0eb407ba355059223186a7832d29f0067c4db105d8d961e4904af186b0f"
+readonly ARM64_OPENFOAM_SHA256="863d0fbd6480321c5ded2b6e7bdedd9caee35e4c723305d15cb7706f81beb6bb"
 readonly ARM64_OPENFOAM_URL="https://github.com/PentagonToy/FoamNordic/releases/download/runtime%2Fopenfoam-v2512-roihu-arm64/$ARM64_OPENFOAM_ASSET"
 
 # ================================================================
@@ -1707,7 +1707,9 @@ prepare_arm64_openfoam_runtime() {
     if [ -f "$openfoam_root/META-INFO/api-info" ] \
         && [ -f "$openfoam_root/etc/bashrc" ] \
         && [ -x "$openfoam_root/wmake/wmake" ] \
-        && [ -x "$openfoam_root/wmake/wclean" ]; then
+        && [ -x "$openfoam_root/wmake/wclean" ] \
+        && [ -e "$openfoam_root/src/OpenFOAM/lnInclude/dictionary.H" ] \
+        && [ -e "$openfoam_root/src/finiteVolume/lnInclude/fvMesh.H" ]; then
         printf 'Reusing OpenFOAM ARM64 runtime: %s\n' "$runtime_root"
         OPENFOAM_RUNTIME_ROOT="$runtime_root"
         export OPENFOAM_RUNTIME_ROOT
@@ -1787,6 +1789,16 @@ PY_DOWNLOAD
 
     if [ ! -x "$openfoam_root/wmake/wclean" ]; then
         echo "OpenFOAM wclean was not found after extraction."
+        return 1
+    fi
+
+    if [ ! -e "$openfoam_root/src/OpenFOAM/lnInclude/dictionary.H" ]; then
+        echo "OpenFOAM core headers were not found after extraction."
+        return 1
+    fi
+
+    if [ ! -e "$openfoam_root/src/finiteVolume/lnInclude/fvMesh.H" ]; then
+        echo "OpenFOAM finiteVolume headers were not found after extraction."
         return 1
     fi
 
