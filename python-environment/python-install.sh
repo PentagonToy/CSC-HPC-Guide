@@ -2078,6 +2078,14 @@ if [ "$FOAMNORDIC_OPENFOAM_ENABLED" = "yes" ]; then
                     "$FOAMNORDIC_CUDA_MODULE"
             fi
 
+            nounset_was_enabled=0
+
+            case "$-" in
+                *u*)
+                    nounset_was_enabled=1
+                    ;;
+            esac
+
             set +u
 
             # shellcheck disable=SC1090
@@ -2086,14 +2094,21 @@ if [ "$FOAMNORDIC_OPENFOAM_ENABLED" = "yes" ]; then
                 WM_PRECISION_OPTION=DP \
                 WM_LABEL_SIZE=32 \
                 WM_COMPILE_OPTION=Opt \
-                WM_MPLIB=SYSTEMOPENMPI \
-                || {
-                    source_status=$?
-                    set -u
-                    return "$source_status"
-                }
+                WM_MPLIB=SYSTEMOPENMPI
 
-            set -u
+            source_status=$?
+
+            if [ "$nounset_was_enabled" -eq 1 ]; then
+                set -u
+            else
+                set +u
+            fi
+
+            if [ "$source_status" -ne 0 ]; then
+                return "$source_status"
+            fi
+
+            unset nounset_was_enabled source_status
             ;;
         *)
             echo "Unknown FoamNordic OpenFOAM provider: ${FOAMNORDIC_OPENFOAM_PROVIDER:-unset}"
