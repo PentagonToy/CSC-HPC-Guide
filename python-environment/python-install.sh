@@ -1303,7 +1303,7 @@ tensorboard
 treeple
 wandb
 xgboost
-sklearnex
+scikit-learn-intelex
 
 # --- Hyperparameter Optimisation ---
 optuna
