@@ -1,0 +1,77 @@
+# Roihu ~/.bashrc example
+
+if [ -f /etc/bashrc ]; then
+    . /etc/bashrc
+fi
+
+if [ -d "$HOME/.bashrc.d" ]; then
+    for rc in "$HOME"/.bashrc.d/*; do
+        if [ -f "$rc" ]; then
+            . "$rc"
+        fi
+    done
+    unset rc
+fi
+
+: "${HANSEUL:=/scratch/project_xxxxxxxx/your-project-directory}"
+export HANSEUL
+
+export PATH="$HOME/bin:$PATH"
+
+# The home directory may be shared by x86_64 and aarch64 nodes. Never add a
+# common ~/.local/bin containing architecture-specific executables.
+_foamnordic_arch=$(uname -m)
+_foamnordic_local="$HOME/.local/$_foamnordic_arch"
+
+if [ -d "$_foamnordic_local/bin" ]; then
+    export PATH="$_foamnordic_local/bin:$PATH"
+fi
+
+if [ -d "$_foamnordic_local/lib" ]; then
+    export LD_LIBRARY_PATH="$_foamnordic_local/lib:${LD_LIBRARY_PATH:-}"
+fi
+
+unset _foamnordic_arch _foamnordic_local
+
+alias hanseul='cd "$HANSEUL"'
+alias check='squeue --me'
+
+Python() {
+    local loader="$HANSEUL/Utilities/Python4FoamNordic.sh"
+
+    if [ ! -r "$loader" ]; then
+        printf 'FoamNordic loader not found: %s\n' "$loader" >&2
+        return 1
+    fi
+
+    source "$loader"
+}
+
+job-cancel() {
+    squeue --me -h -o "%i %P %j" \
+        | awk '$2 != "interactive" && $3 != "code" && $3 != "bash" {print $1}' \
+        | xargs -r scancel
+}
+
+if [ -r /usr/share/bash-completion/bash_completion ]; then
+    source /usr/share/bash-completion/bash_completion
+elif [ -r /etc/bash_completion ]; then
+    source /etc/bash_completion
+fi
+
+if [[ $- == *i* ]] \
+    && [[ -z "${SLURM_JOB_ID:-}" ]] \
+    && [ -r "$HOME/.local/share/blesh/out/ble.sh" ]; then
+    source "$HOME/.local/share/blesh/out/ble.sh"
+fi
+
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    export PS1="\[\e[1;33m\][ComputeNode:\h \W]\$ \[\e[0m\]"
+fi
+
+if [[ $- == *i* ]] \
+    && [ -t 1 ] \
+    && [ -z "${WARP_BOOTSTRAPPED:-}" ]; then
+    printf '\eP$f{"hook":"SourcedRcFileForWarp","value":{"shell":"bash"}}\x9c'
+fi
+

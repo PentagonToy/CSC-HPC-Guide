@@ -1,111 +1,91 @@
 # CSC HPC Guide
 
-**Last updated:** 22 July 2026
+Practical notes and reproducible setup files for working with CSC systems,
+with Roihu as the primary target.
 
-**Revised by:**  
-Aalto University  
-Department of Energy and Mechanical Engineering  
-Energy Conversion and Systems Team
+**Last reviewed:** 18 August 2026
 
----
+## Start here
 
-## Overview & Motivation
+Use the guide in this order when preparing a new workstation or account:
 
-This repository provides a practical setup guide for using CSC high-performance computing systems, with particular emphasis on the newly introduced **Roihu** environment. The workflow covers secure SSH authentication, remote development, cloud-storage mounting, and reproducible Python environments using Tykky.
+1. [Create and renew a CSC SSH certificate](ssh-connection/ssh-certificate.md).
+2. [Configure the Roihu SSH hosts](ssh-connection/ssh-connection.md).
+3. [Configure the macOS and Roihu shells](shell-configuration/README.md).
+4. [Mount project storage with rclone](rclone-mount-unmount/rclone-mount-unmount.md).
+5. [Install the FoamNordic Python environment](python-environment/README.md).
+6. [Use a VS Code tunnel on an allocated node](ssh-connection/vscode-tunnel.md).
 
-*Most procedures also apply to **Puhti** and **Mahti** with minor modifications to hostnames, partitions, and modules.*
+## Guide map
 
----
+| Area | Guide | Purpose |
+|---|---|---|
+| Authentication | [SSH certificate](ssh-connection/ssh-certificate.md) | Generate, inspect, and renew the short-lived CSC certificate. |
+| Connection | [SSH configuration](ssh-connection/ssh-connection.md) | Configure `roihu-cpu` and `roihu-gpu`. |
+| Shells | [Shell configuration](shell-configuration/README.md) | Keep macOS zsh and Roihu Bash settings modular and architecture-safe. |
+| Remote development | [VS Code tunnel](ssh-connection/vscode-tunnel.md) | Run VS Code on a Slurm-allocated compute node. |
+| Mounted storage | [rclone mount](rclone-mount-unmount/rclone-mount-unmount.md) | Mount Roihu project storage on macOS or Linux. |
+| Data movement | [File transfer](file-transfer/file-transfer.md) | Move large datasets between CSC systems. |
+| Python and FoamNordic | [Environment installer](python-environment/README.md) | Build and load the pinned Tykky environment. |
+| Interactive Bash | [ble.sh autosuggestions](useful-bash/autosuggestion.md) | Add optional history suggestions to Bash. |
 
-## Repository Structure
+## Repository layout
 
 ```text
 CSC-HPC-Guide/
-├── file-transfer/          # Data movement workflows
-├── python-environment/     # Tykky, SmartSim, and ML environment builds
-├── rclone-mount-unmount/   # Cloud storage integration
-├── ssh-connection/         # SSH certificates, connections, and VS Code tunnels
-└── useful-bash/            # Useful shell configuration and helper guides
+├── file-transfer/
+├── python-environment/
+│   ├── README.md
+│   └── python-install.sh
+├── rclone-mount-unmount/
+├── shell-configuration/
+│   ├── README.md
+│   ├── bashrc.roihu.example
+│   ├── csc-roihu.zsh.example
+│   └── zshrc.macos.example
+├── ssh-connection/
+└── useful-bash/
 ```
 
----
+The `python-environment` directory deliberately retains its existing structure.
+Its README is the canonical description of the installer; this top-level page
+does not duplicate package versions or installation internals.
 
-## Recommended Setup Workflow
+## Where commands should run
 
-### 1. SSH & Connection
-
-* **[SSH Certificate](ssh-connection/ssh-certificate.md):** Configure certificate-based authentication for CSC systems.
-* **[SSH Connection](ssh-connection/ssh-connection.md):** Manage connections to CSC login nodes.
-* **[VS Code Tunnel](ssh-connection/vscode-tunnel.md):** Develop remotely on interactive compute nodes.
-
-### 2. Data & Storage
-
-* **[rclone Mount](rclone-mount-unmount/rclone-mount-unmount.md):** Mount cloud-hosted files and datasets.
-* **[File Transfer](file-transfer/file-transfer.md):** Transfer data between local systems and CSC storage.
-
-### 3. Python Environment Configuration
-
-The Python environments are packaged with **Tykky** to minimise small-file I/O overhead on Lustre parallel filesystems.
-
-#### Unified SmartSim and Machine-Learning Environment
-
-* **[SmartSim Environment Configuration Guide](python-environment/smartsim-environment.md)**
-* **Purpose:** SmartSim `1.0.3+csc`, SmartRedis `1.0.0+csc`, RedisAI, JAX, Equinox, TensorFlow, PyTorch, ONNX, PySR, and JuliaCall workflows.
-* **Python:** 3.12
-* **NumPy:** `>=2.0`
-* **TensorFlow:** `2.18.1`
-* **PyTorch:** `2.7.1`
-* **Architecture support:** x86_64 and ARM64/aarch64
-* **RedisAI backends:** TensorFlow, ONNX Runtime, LibTorch, and JAX
-
-This unified environment replaces the previously separate SmartSim and machine-learning environments. A standalone `PythonML` environment is not required when using this stack.
-
-SmartSim, SmartRedis, and RedisAI are installed from the CSC-maintained releases:
-
-* SmartSim: `v1.0.3-csc`
-* SmartRedis: `v1.0.0-csc`
-* RedisAI: `v1.0.0-csc`
-
-The Tykky environment and native SmartRedis library must be built separately for each architecture.
-
-The corresponding environment loader is available at:
-
-* **[smartsim-python.sh](python-environment/smartsim-python.sh)**
-
-### 4. Shell Utilities
-
-* **[Shell Autosuggestions](useful-bash/autosuggestion.md):** Configure command-line autosuggestions for interactive shell usage.
-
----
-
-## Quick Start Links
-
-1. [SSH Certificate Configuration](ssh-connection/ssh-certificate.md)
-2. [SSH Connection to CSC Login Nodes](ssh-connection/ssh-connection.md)
-3. [VS Code Tunnel to an Interactive Compute Node](ssh-connection/vscode-tunnel.md)
-4. [rclone Mount and Unmount Guide](rclone-mount-unmount/rclone-mount-unmount.md)
-5. [File Transfer Best Practices](file-transfer/file-transfer.md)
-6. [Unified SmartSim and Machine-Learning Environment](python-environment/smartsim-environment.md)
-7. [SmartSim Environment Loader](python-environment/smartsim-python.sh)
-8. [Shell Autosuggestions](useful-bash/autosuggestion.md)
-
----
-
-## Recommended Usage Principles
-
-| Resource | Best Practice |
+| Location | Appropriate work |
 |---|---|
-| **Login Nodes** | SSH access, file management, job submission, and lightweight editing. |
-| **Interactive Compute Nodes** | Compilation, package installation, notebooks, debugging, and environment builds. |
-| **Batch Jobs** | Production simulations, large-scale data processing, and long-running workloads. |
-| **Project Scratch** | Active datasets, software environments, and temporary build data. |
-| **Home Directory** | Lightweight configuration files such as `.bashrc`, `.zshrc`, and SSH settings. |
+| Local macOS workstation | SSH configuration, certificate renewal, rclone mount control, and local editing. |
+| Roihu login node | File inspection, Git operations, job submission, and other lightweight administration. |
+| Interactive compute node | Compilation, Tykky environment creation, package installation, tests, and debugging. |
+| Batch job | Production simulations and long-running workloads. |
 
----
+Do not run large builds or test suites on a login node. A local rclone mount is
+also unsuitable for builds that create or scan many small files: edit through
+the mount when convenient, then build and test directly on Roihu.
 
-## System Compatibility
+## Paths and placeholders
 
-* **Targets:** Roihu, Puhti, and Mahti.
-* **Architectures:** x86_64 and ARM64/aarch64.
-* **Key considerations:** Use the module versions, Slurm partitions, compiler versions, and GPU hardware appropriate for the target cluster.
-* **Build policy:** Large builds, including Tykky containerisation and SmartRedis compilation, must be executed on **compute nodes** through interactive allocations to avoid resource contention on shared login nodes.
+Examples use variables instead of embedding a person's account:
+
+```bash
+CSC_USER="your-csc-username"
+CSC_PROJECT="project_xxxxxxxx"
+CSC_PROJECT_DIR="your-project-directory"
+```
+
+The corresponding Roihu project path is:
+
+```text
+/scratch/$CSC_PROJECT/$CSC_PROJECT_DIR
+```
+
+Replace placeholders before using a command. Shell variables are not expanded
+inside `~/.ssh/config`; enter the CSC username literally in that file.
+
+## FoamNordic revision policy
+
+`python-environment/python-install.sh` pins FoamNordic to a full Git commit.
+After a FoamNordic release change, update the installer and its README together,
+review the diff, and only then rebuild the environment. The pinned commit in the
+installer is authoritative.

@@ -8,8 +8,8 @@ Last updated: 13 August 2026
 > Copy the installer to a Roihu-accessible directory and run it with Bash:
 >
 > ```bash
-> chmod +x foamnordic-install.sh
-> ./foamnordic-install.sh
+> chmod +x python-install.sh
+> ./python-install.sh
 > ```
 >
 > The installer must be executed with Bash. Do not source it.
@@ -17,7 +17,7 @@ Last updated: 13 August 2026
 > The installer supports static checks:
 >
 > ```bash
-> ./foamnordic-install.sh --check
+> ./python-install.sh --check
 > ```
 >
 > The generated environment loader must be sourced:
@@ -1141,7 +1141,7 @@ rm -rf "$PYTHON_ROOT/src/FoamNordic"
 Then run the installer again:
 
 ```bash
-./foamnordic-install.sh
+./python-install.sh
 ```
 
 Changing `INSTALL_PYSR` requires rebuilding the Tykky environment because
@@ -1325,7 +1325,7 @@ Do not mix:
 Execute the installer:
 
 ```bash
-./foamnordic-install.sh
+./python-install.sh
 ```
 
 Source the environment loader:
