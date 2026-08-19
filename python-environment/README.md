@@ -119,14 +119,14 @@ https://github.com/PentagonToy/FoamNordic.git
 The configured commit is:
 
 ```text
-b15a0bf7e2cb272771eb7cee81229e83222edd29
+6edca8d39475207858bc9554e0d2f03286a8cbeb
 ```
 
 The installer defines:
 
 ```bash
 readonly FOAMNORDIC_REPO="https://github.com/PentagonToy/FoamNordic.git"
-readonly FOAMNORDIC_REF="b15a0bf7e2cb272771eb7cee81229e83222edd29"
+readonly FOAMNORDIC_REF="6edca8d39475207858bc9554e0d2f03286a8cbeb"
 ```
 
 The repository is checked out at:
@@ -1227,7 +1227,7 @@ Verify that the configured commit exists:
 ```bash
 git ls-remote \
     https://github.com/PentagonToy/FoamNordic.git \
-    b15a0bf7e2cb272771eb7cee81229e83222edd29
+    6edca8d39475207858bc9554e0d2f03286a8cbeb
 ```
 
 ### Missing FoamNordic command
