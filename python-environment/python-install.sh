@@ -1334,8 +1334,7 @@ tensorly
 dvc
 
 # --- Custom Utilities ---
-jinja2
-onsaemiro
+onsaemiro>=1.0.5
 DataGraph @ git+https://github.com/PentagonToy/DataGraph.git#subdirectory=DataGraph
 
 # --- Notebook Execution ---
@@ -1364,6 +1363,7 @@ vtk
 hydra-core
 pydantic
 PyYAML
+jinja2
 
 # --- Profiling & Logging ---
 loguru
@@ -2205,14 +2205,9 @@ create_update_post_install_script() {
 set -Eeuo pipefail
 
 : "${CW_BUILD_TMPDIR:?CW_BUILD_TMPDIR is not set}"
-: "${PYTHON_ROOT:?PYTHON_ROOT is not set}"
 : "${STATE_ROOT:?STATE_ROOT is not set}"
-: "${ENV_ARCH:?ENV_ARCH is not set}"
-: "${INSTALL_PYSR:=yes}"
 : "${BUILD_JOBS:=1}"
-: "${JULIA_BUILD_THREADS:=1}"
 
-# The cache lifecycle is owned by foamnordic-update; never delete it from here.
 : "${PIP_CACHE_DIR:=$CW_BUILD_TMPDIR/.pip_cache}"
 : "${UV_CACHE_DIR:=$CW_BUILD_TMPDIR/.uv_cache}"
 
@@ -2224,71 +2219,37 @@ export UV_NO_PROGRESS=1
 export PIP_PROGRESS_BAR=off
 export NO_COLOR=1
 export CLICOLOR=0
-export MAKEFLAGS="-j$BUILD_JOBS"
-export CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS"
-export JULIA_NUM_THREADS="$JULIA_BUILD_THREADS"
 
 mkdir -p "$PIP_CACHE_DIR" "$UV_CACHE_DIR"
 
 echo "pip cache: $PIP_CACHE_DIR"
 echo "uv cache:  $UV_CACHE_DIR"
 
-# shellcheck disable=SC1091
-source "$PYTHON_ROOT/vcs4FoamNordic.sh"
-collect_vcs_packages "$PYTHON_ROOT/requirements.in"
-
 python -m pip install --progress-bar off uv
-
-uv pip install \
-    --link-mode=copy \
-    "${VCS_REFRESH_ARGS[@]}" \
-    --requirements "$PYTHON_ROOT/requirements.in"
 
 UPDATE_REQUEST="$STATE_ROOT/update-request.txt"
 
-if [ -s "$UPDATE_REQUEST" ]; then
-    mapfile -t UPDATE_PACKAGES < "$UPDATE_REQUEST"
-
-    uv pip install \
-        --link-mode=copy \
-        --upgrade \
-        "${UPDATE_PACKAGES[@]}"
+if [ ! -s "$UPDATE_REQUEST" ]; then
+    echo "No package update was requested."
+    exit 1
 fi
 
-if [ "$INSTALL_PYSR" = "yes" ]; then
-    PYTHON_PREFIX="$(python -c 'import sys; print(sys.prefix)')"
-    export JULIA_DEPOT_PATH="$PYTHON_PREFIX/julia_depot"
-    export PYTHON_JULIAPKG_PROJECT="$PYTHON_PREFIX/julia_env"
+mapfile -t UPDATE_PACKAGES < "$UPDATE_REQUEST"
 
-    python - <<'PY'
-import juliapkg
-import pysr
+echo "Updating requested packages:"
+printf '  %s\n' "${UPDATE_PACKAGES[@]}"
 
-juliapkg.resolve()
-print(f"PySR version:     {pysr.__version__}")
-print(f"Julia executable: {juliapkg.executable()}")
-PY
+uv pip install \
+    --link-mode=copy \
+    --upgrade \
+    --no-deps \
+    "${UPDATE_PACKAGES[@]}"
 
-    python - <<'PY'
-import subprocess
-import juliapkg
-
-julia = juliapkg.executable()
-project = juliapkg.project()
-
-subprocess.run(
-    [
-        julia,
-        f"--project={project}",
-        "-e",
-        "using Pkg; Pkg.instantiate(); Pkg.precompile()",
-    ],
-    check=True,
-)
-PY
+if ! uv pip check; then
+    echo
+    echo "Warning: package compatibility issues were detected."
+    echo "The requested update was kept anyway."
 fi
-
-uv pip check
 
 python -m pip list --format=freeze \
     | grep -viE '^(smartredis|smartsim)==' \
@@ -2296,8 +2257,6 @@ python -m pip list --format=freeze \
     > "$STATE_ROOT/requirements.txt"
 
 rm -f "$UPDATE_REQUEST"
-
-drop_vcs_cache_entries "${VCS_PACKAGES[@]}"
 EOF_UPDATE_POST
 
     chmod +x "$PYTHON_ROOT/update4FoamNordic.sh"
@@ -2313,7 +2272,7 @@ set -Eeuo pipefail
 print_usage() {
     cat <<'EOF_USAGE'
 Usage:
-  foamnordic-update <package> [package ...]  Update packages in the environment
+  foamnordic-update <package> [package ...]  Patch Python packages in the environment
   foamnordic-update --cache-info             Show the package cache location and size
   foamnordic-update --clear-cache            Delete the package cache
   foamnordic-update --fresh <package>        Ignore the cache for this run
@@ -2459,10 +2418,9 @@ for package in "${PACKAGES[@]}"; do
             exit 1
             ;;
         pysr|julia)
-            if [ "$INSTALL_PYSR" != "yes" ]; then
-                echo "$package_name requires INSTALL_PYSR=yes."
-                exit 1
-            fi
+            echo "$package_name is not supported by the lightweight updater."
+            echo "Rebuild the environment to change the PySR/Julia toolchain."
+            exit 1
             ;;
     esac
 done
@@ -2531,33 +2489,7 @@ mkdir -p "$TMP_BUILD_DIR"
 conda-containerize update \
     --post-install "$PYTHON_ROOT/update4FoamNordic.sh" \
     "$ENV_PREFIX" \
-    2> >(grep -v '^Unrecognised xattr prefix lustre\.lov$' >&2)
-
-if [ "$INSTALL_PYSR" = "yes" ]; then
-    JULIA_ENV_RUNTIME="$ARCH_ROOT/julia/env"
-    JULIA_DEPOT_RUNTIME="$ARCH_ROOT/julia/depot"
-
-    rm -rf "$JULIA_ENV_RUNTIME"
-
-    JULIA_ENV_RUNTIME="$JULIA_ENV_RUNTIME" \
-        "$ENV_PREFIX/bin/python" - <<'PY'
-import os
-import shutil
-import sys
-from pathlib import Path
-
-source = Path(sys.prefix) / "julia_env"
-target = Path(os.environ["JULIA_ENV_RUNTIME"])
-
-if not source.is_dir():
-    raise SystemExit(f"Packaged Julia environment not found: {source}")
-
-shutil.copytree(source, target)
-print(f"Updated Julia runtime: {source} -> {target}")
-PY
-
-    mkdir -p "$JULIA_DEPOT_RUNTIME"
-fi
+    2> >(grep -v '^Unrecognised xattr prefix lustre.lov$' >&2)
 
 close_cache
 
