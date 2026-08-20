@@ -1163,6 +1163,31 @@ set_base_paths() {
     mkdir -p "$PYTHON_ROOT"
 }
 
+# CSC home directories may contain symlinks into project scratch.  A symlink
+# can survive after its target has been removed, in which case `mkdir -p` on a
+# child path fails with "File exists".  Recreate only the missing target and
+# otherwise leave the user's home layout untouched.
+ensure_home_storage_directory() {
+    local directory="$1"
+    local target
+
+    if [ -L "$directory" ] && [ ! -e "$directory" ]; then
+        target="$(readlink "$directory")"
+
+        case "$target" in
+            /*) ;;
+            *) target="$(dirname "$directory")/$target" ;;
+        esac
+
+        printf 'Restoring missing symlink target: %s -> %s\n' \
+            "$directory" \
+            "$target"
+        mkdir -p "$target"
+    fi
+
+    mkdir -p "$directory"
+}
+
 set_global_paths() {
     set_base_paths
 
@@ -1179,6 +1204,9 @@ set_global_paths() {
     export ARM64_OPENFOAM_TAG ARM64_OPENFOAM_ASSET
     export ARM64_OPENFOAM_SHA256 ARM64_OPENFOAM_URL
     export TMP_BUILD_DIR="$ARCH_ROOT/tykky"
+
+    ensure_home_storage_directory "$HOME/.config"
+    ensure_home_storage_directory "$HOME/.local"
 
     mkdir -p \
         "$ARCH_ROOT/envs" \
@@ -1625,7 +1653,8 @@ step_build_tykky() {
 
     # The temporary build directory is disposable; the cache lives elsewhere.
     rm -rf "$ENV_PREFIX" "$TMP_BUILD_DIR"
-    mkdir -p "$TMP_BUILD_DIR"
+    export XDG_CACHE_HOME="$TMP_BUILD_DIR/xdg-cache"
+    mkdir -p "$TMP_BUILD_DIR" "$XDG_CACHE_HOME"
 
     local tykky_root
     local tykky_config
@@ -2519,13 +2548,7 @@ step_register_jupyter_kernel() {
     launcher="$STATE_ROOT/jupyter-kernel.sh"
     kernel_name="$ENV_NICKNAME-$MACHINE_ARCH"
     kernel_display="Python 3.12 ($ENV_NICKNAME $MACHINE_ARCH)"
-    kernel_dir="$(
-        "$ENV_PREFIX/bin/python" - <<'PY_JUPYTER_DATA'
-from jupyter_core.paths import jupyter_data_dir
-
-print(jupyter_data_dir())
-PY_JUPYTER_DATA
-    )/kernels/$kernel_name"
+    kernel_dir="$HOME/.local/share/jupyter/kernels/$kernel_name"
 
     cat <<EOF_KERNEL_LAUNCHER > "$launcher"
 #!/bin/bash
