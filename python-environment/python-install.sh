@@ -610,6 +610,29 @@ raise SystemExit(main(sys.argv[1:]))
 }
 
 write_loader() {
+    local python_overlay="$PYTHON_ROOT/$MACHINE_ARCH/overlays/$ENV_NICKNAME-3.12"
+    mkdir -p "$python_overlay"
+    cat > "$python_overlay/sitecustomize.py" <<'PY'
+"""Let a rebuilt FoamNordic overlay supersede Tykky's frozen editable wheel."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import sys
+
+
+overlay = os.environ.get("PYTHON_OVERLAY")
+if overlay:
+    package = Path(overlay) / "foamnordic"
+    if (package / "__init__.py").is_file() and any(package.glob("_native*.so")):
+        sys.meta_path[:] = [
+            finder
+            for finder in sys.meta_path
+            if not finder.__class__.__module__.startswith("_editable_skbc_foamnordic")
+        ]
+PY
+
     cat > "$LOADER" <<'EOF'
 #!/usr/bin/env bash
 
@@ -712,8 +735,8 @@ Usage:
   update-python --list
 
 Packages are installed with uv into a writable overlay. The Tykky base
-environment is not rebuilt. FoamNordic is updated from its editable Git
-checkout and its persistent native runtime is rebuilt separately.
+environment is not rebuilt. FoamNordic is updated from its Git checkout and
+its Python extension and persistent native runtime are rebuilt together.
 USAGE
 }
 
@@ -766,6 +789,15 @@ foamnordic)
         esac
         native_path="\${native_path:+\$native_path:}\$path_entry"
     done < <(printf '%s' "\$PATH" | tr ':' '\n')
+
+    mkdir -p "\$PYTHON_OVERLAY"
+    PATH="\$native_path:\$ENV_PREFIX/bin" uv pip install \
+        --python "\$ENV_PREFIX/bin/python" \
+        --target "\$PYTHON_OVERLAY" \
+        --link-mode=copy \
+        --reinstall \
+        --no-deps \
+        "\$FOAMNORDIC_DIR/python"
 
     FOAMNORDIC_NATIVE_PATH="\$native_path" "\$ENV_PREFIX/bin/python" -c '
 import os

@@ -1,16 +1,15 @@
 # FoamNordic Python environment on CSC Roihu
 
 This installer creates a Python 3.12 environment for FoamNordic with CSC
-Tykky. It follows the `dev` branch and keeps FoamNordic as an editable
-installation. Both Roihu CPU (`x86_64`) and GPU (`aarch64`) login environments
-are supported.
+Tykky. It follows the `dev` branch and keeps its source in a shared checkout.
+Both Roihu CPU (`x86_64`) and GPU (`aarch64`) login environments are supported.
 
 ## Included
 
 - A Tykky-managed Python 3.12 environment
 - Scientific Python, JAX, scikit-learn, ONNX, Cantera, and visualisation tools
 - `pyvista`, `vtk`, and `trame` for interactive visualisation
-- An optional editable checkout of
+- An optional source checkout of
   `https://github.com/PentagonToy/FoamNordic.git` on `dev`
 - FoamNordic native components built against `openfoam/2512`
 - An ARM64 OpenFOAM v2512 runtime and user module on Roihu GPU
@@ -144,9 +143,11 @@ Do not install FoamNordic into the overlay. It has a dedicated update path:
 update-python foamnordic
 ```
 
-This fast-forwards the editable `FoamNordic/dev` checkout, rebuilds the
-persistent native runtime using the Roihu OpenFOAM toolchain, and runs
-`foamnordic doctor`.
+This fast-forwards the `FoamNordic/dev` checkout, rebuilds its Python package
+and native extension in the architecture-specific writable overlay, rebuilds
+the persistent runtime using the Roihu OpenFOAM toolchain, and runs
+`foamnordic doctor`. Rebuilding both components prevents new Python code from
+loading a native extension frozen in the original Tykky image.
 
 For ordinary packages, the command uses `uv` and writes
 architecture-specific overrides to:
@@ -156,8 +157,8 @@ architecture-specific overrides to:
 ```
 
 The loader puts this directory before the immutable Tykky environment on
-`PYTHONPATH`. FoamNordic itself is already editable and should be updated with
-the dedicated repository updater below. If FoamNordic changes its declared
+`PYTHONPATH`. Update FoamNordic with its dedicated updater so its Python and
+native components remain synchronized. If FoamNordic changes its declared
 dependencies, rerun the full installer.
 
 ## Update
@@ -169,10 +170,9 @@ bash /scratch/<allocation-account>/<user>/Source/update-foamnordic-ref.sh
 ```
 
 It fast-forwards `CSC-HPC-Guide/main`, installs the canonical installer,
-fast-forwards `FoamNordic/dev`, rebuilds against `openfoam/2512`, and runs
-`foamnordic doctor`. Because the installation is editable, updating the source
-checkout updates the imported Python package without rebuilding the Tykky
-environment.
+fast-forwards `FoamNordic/dev`, rebuilds the Python extension and native
+runtime against `openfoam/2512`, and runs `foamnordic doctor` without rebuilding
+the Tykky environment.
 
 The updater stops if either repository contains uncommitted changes. It does
 not rewrite commits or discard local work.
