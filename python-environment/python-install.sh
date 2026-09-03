@@ -146,6 +146,12 @@ fi
 
 collect_configuration() {
     local raw_project
+    local identity_file="$HOME/.config/csc-hpc/identity.sh"
+
+    if [ -f "$identity_file" ]; then
+        # shellcheck disable=SC1090
+        source "$identity_file"
+    fi
 
     printf '%s\n' 'FoamNordic environment installer for CSC Roihu'
     prompt_value "CSC project" raw_project "${CSC_PROJECT:-}"
