@@ -14,6 +14,8 @@ nodes.
   `https://github.com/PentagonToy/FoamNordic.git` on `dev`
 - FoamNordic native components built against `openfoam/2512`
 - A Jupyter kernel and reusable environment loader
+- A lightweight installation spinner with per-step elapsed time
+- Per-step logs under `Utilities/Python/logs/install-<timestamp>`
 
 The environment intentionally excludes PyFoam, the standalone `hdbscan`
 package, PyTorch, TensorFlow, tf2onnx, ipyvtklink, Julia, and PySR. FoamNordic

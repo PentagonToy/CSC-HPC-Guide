@@ -15,6 +15,9 @@ readonly OPENFOAM_MPI_MODULE="openmpi/5.0.10"
 readonly OPENFOAM_MODULE="openfoam/2512"
 readonly PYTHON_VERSION="3.12"
 
+SPINNER_PID=""
+INSTALL_LOG_DIR=""
+
 fail() {
     printf 'Error: %s\n' "$*" >&2
     exit 1
@@ -58,16 +61,75 @@ format_elapsed() {
         "$((seconds % 60))"
 }
 
+stop_spinner() {
+    if [ -n "${SPINNER_PID:-}" ]; then
+        kill "$SPINNER_PID" 2>/dev/null || true
+        wait "$SPINNER_PID" 2>/dev/null || true
+        SPINNER_PID=""
+    fi
+}
+
+trap stop_spinner EXIT INT TERM
+
 run_step() {
     local number="$1"
     local description="$2"
     shift 2
     local started="$SECONDS"
+    local status=0
+    local animated=0
+    local step_log="$INSTALL_LOG_DIR/step-$number.log"
 
-    printf '[Step %d/7] %s ...\n' "$number" "$description"
-    "$@"
-    printf '[Step %d/7] %s [%s]\n' \
-        "$number" "$description" "$(format_elapsed "$((SECONDS - started))")"
+    if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ]; then
+        animated=1
+        (
+            local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+            local index=0
+
+            while true; do
+                printf '\r%s [Step %d/7] %s [%s]' \
+                    "${frames[index % ${#frames[@]}]}" \
+                    "$number" \
+                    "$description" \
+                    "$(format_elapsed "$((SECONDS - started))")"
+                index=$((index + 1))
+                sleep 0.1
+            done
+        ) &
+        SPINNER_PID=$!
+    else
+        printf '[Step %d/7] %s ...\n' "$number" "$description"
+    fi
+
+    if "$@" >"$step_log" 2>&1; then
+        status=0
+    else
+        status=$?
+    fi
+
+    stop_spinner
+
+    if [ "$status" -eq 0 ]; then
+        if [ "$animated" -eq 1 ]; then
+            printf '\r✓ [Step %d/7] %s [%s]\033[K\n' \
+                "$number" "$description" "$(format_elapsed "$((SECONDS - started))")"
+        else
+            printf '✓ [Step %d/7] %s [%s]\n' \
+                "$number" "$description" "$(format_elapsed "$((SECONDS - started))")"
+        fi
+    else
+        if [ "$animated" -eq 1 ]; then
+            printf '\r✗ [Step %d/7] %s [%s]\033[K\n' \
+                "$number" "$description" "$(format_elapsed "$((SECONDS - started))")" >&2
+        else
+            printf '✗ [Step %d/7] %s [%s]\n' \
+                "$number" "$description" "$(format_elapsed "$((SECONDS - started))")" >&2
+        fi
+        printf 'Step log: %s\n' "$step_log" >&2
+        tail -n 240 "$step_log" >&2
+    fi
+
+    return "$status"
 }
 
 run_self_check() {
@@ -425,6 +487,8 @@ PY
 main() {
     local started="$SECONDS"
     collect_configuration
+    INSTALL_LOG_DIR="$PYTHON_ROOT/logs/install-$(date '+%Y%m%d-%H%M%S')"
+    mkdir -p "$INSTALL_LOG_DIR"
     run_step 1 "Preparing directories" prepare_directories
     run_step 2 "Writing Tykky configuration" write_environment_files
     run_step 3 "Building the Tykky environment" build_tykky_environment
@@ -436,6 +500,7 @@ main() {
     printf '\nInstallation completed in %s.\n' "$(format_elapsed "$((SECONDS - started))")"
     printf 'Load with: source "%s"\n' "$LOADER"
     printf 'FoamNordic source: %s (%s)\n' "$FOAMNORDIC_DIR" "$FOAMNORDIC_BRANCH"
+    printf 'Installation logs: %s\n' "$INSTALL_LOG_DIR"
 }
 
 main "$@"
