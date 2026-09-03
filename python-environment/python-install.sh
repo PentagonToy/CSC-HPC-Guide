@@ -387,7 +387,18 @@ build_foamnordic() {
     export CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS"
     export WM_NCOMPPROCS="$BUILD_JOBS"
 
-    "$ENV_PREFIX/bin/foamnordic" build --source "$FOAMNORDIC_DIR"
+    # Tykky launchers activate their Conda toolchain inside the container. Keep
+    # its Python packages, but restore the Roihu module PATH before FoamNordic
+    # starts CMake and wmake so OpenFOAM is linked with its matching compiler.
+    FOAMNORDIC_NATIVE_PATH="$PATH" "$ENV_PREFIX/bin/python" -c '
+import os
+import sys
+
+os.environ["PATH"] = os.environ.pop("FOAMNORDIC_NATIVE_PATH")
+from foamnordic._cli import main
+
+raise SystemExit(main(sys.argv[1:]))
+' build --source "$FOAMNORDIC_DIR"
 }
 
 write_loader() {
