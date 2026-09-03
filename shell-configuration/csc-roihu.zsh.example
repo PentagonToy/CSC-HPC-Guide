@@ -1,0 +1,158 @@
+# macOS CSC certificate and Roihu rclone helpers
+
+export CSC_USER="your-csc-username"
+export CSC_PROJECT="project_xxxxxxxx"
+export CSC_PROJECT_DIR="your-project-directory"
+
+export ROIHU_REMOTE_PATH="/scratch/${CSC_PROJECT}/${CSC_PROJECT_DIR}"
+export ROIHU_MOUNT_PATH="${HOME}/ROIHU"
+export ROIHU_LOG_DIR="${HOME}/Rclone"
+export ROIHU_LOG_FILE="${ROIHU_LOG_DIR}/rclone-roihu.log"
+
+unalias csc-ssh-keys mount-roihu unmount-roihu umount-roihu 2>/dev/null
+
+_csc_certificate_expiry() {
+    local certificate="${HOME}/.ssh/id_ed25519-cert.pub"
+    local valid_until
+
+    [[ -f "${certificate}" ]] || return 1
+
+    valid_until=$(
+        ssh-keygen -L -f "${certificate}" 2>/dev/null \
+            | sed -n 's/.*Valid: from .* to //p'
+    )
+
+    [[ -n "${valid_until}" ]] || return 1
+
+    date -j -f '%Y-%m-%dT%H:%M:%S' \
+        "${valid_until}" '+%s' 2>/dev/null
+}
+
+_csc_certificate_valid() {
+    local expiry_epoch
+
+    expiry_epoch=$(_csc_certificate_expiry) || return 1
+    (( expiry_epoch > $(date '+%s') ))
+}
+
+csc-ssh-keys() {
+    local certificate="${HOME}/.ssh/id_ed25519-cert.pub"
+    local public_key="${HOME}/.ssh/id_ed25519.pub"
+    local helper_dir="${HOME}/certificate-helper-tool"
+    local expiry_epoch remaining_seconds valid_until
+
+    if [[ ! -r "${helper_dir}/csc_cert.py" ]]; then
+        print -u2 "CSC certificate helper not found: ${helper_dir}/csc_cert.py"
+        return 1
+    fi
+
+    if [[ ! -r "${public_key}" ]]; then
+        print -u2 "SSH public key not found: ${public_key}"
+        return 1
+    fi
+
+    if _csc_certificate_valid; then
+        expiry_epoch=$(_csc_certificate_expiry) || return 1
+        remaining_seconds=$((expiry_epoch - $(date '+%s')))
+        valid_until=$(date -r "${expiry_epoch}" '+%Y-%m-%d %H:%M:%S')
+
+        printf 'Certificate valid until: %s\n' "${valid_until}"
+        printf 'Time remaining: %dh %dm\n' \
+            $((remaining_seconds / 3600)) \
+            $(((remaining_seconds % 3600) / 60))
+
+        if ! read -q '?Renew it now? [y/N] '; then
+            printf '\nUsing the current certificate.\n'
+            return 0
+        fi
+
+        printf '\n'
+    fi
+
+    rm -f "${certificate}" || return 1
+
+    (
+        cd "${helper_dir}" || return 1
+        python3 csc_cert.py -u "${CSC_USER}" "${public_key}"
+    )
+}
+
+_roihu_is_mounted() {
+    mount | grep -Fq "on ${ROIHU_MOUNT_PATH} "
+}
+
+mount-roihu() {
+    if _roihu_is_mounted; then
+        printf 'Roihu is already mounted at %s.\n' "${ROIHU_MOUNT_PATH}"
+        return 0
+    fi
+
+    if ! _csc_certificate_valid; then
+        print -u2 "No valid CSC SSH certificate found."
+        print -u2 "Run 'csc-ssh-keys' first."
+        return 1
+    fi
+
+    if ! command -v rclone >/dev/null 2>&1; then
+        print -u2 "rclone is not installed or not in PATH."
+        return 1
+    fi
+
+    mkdir -p "${ROIHU_MOUNT_PATH}" "${ROIHU_LOG_DIR}" || return 1
+
+    rclone mount \
+        "Roihu:${ROIHU_REMOTE_PATH}" \
+        "${ROIHU_MOUNT_PATH}" \
+        --vfs-cache-mode full \
+        --vfs-cache-max-size 10G \
+        --vfs-read-chunk-size 128M \
+        --buffer-size 64M \
+        --vfs-cache-max-age 24h \
+        --no-modtime \
+        --timeout 30m \
+        --attr-timeout 60s \
+        --dir-cache-time 4m \
+        --tpslimit 10 \
+        --log-level INFO \
+        --log-file "${ROIHU_LOG_FILE}" \
+        --daemon || return 1
+
+    sleep 2
+
+    if _roihu_is_mounted; then
+        printf 'Roihu mounted at %s.\n' "${ROIHU_MOUNT_PATH}"
+    else
+        print -u2 "Roihu mount failed. Check ${ROIHU_LOG_FILE}."
+        return 1
+    fi
+}
+
+unmount-roihu() {
+    if _roihu_is_mounted; then
+        diskutil unmount "${ROIHU_MOUNT_PATH}" 2>/dev/null \
+            || diskutil unmount force "${ROIHU_MOUNT_PATH}" 2>/dev/null \
+            || umount -f "${ROIHU_MOUNT_PATH}" 2>/dev/null
+    fi
+
+    sleep 2
+
+    if pgrep -f "rclone mount.*Roihu:" >/dev/null; then
+        pkill -SIGTERM -f "rclone mount.*Roihu:"
+        sleep 2
+    fi
+
+    if _roihu_is_mounted; then
+        print -u2 "Roihu is still mounted at ${ROIHU_MOUNT_PATH}."
+        return 1
+    fi
+
+    if pgrep -f "rclone mount.*Roihu:" >/dev/null; then
+        print -u2 "The Roihu rclone process is still running."
+        return 1
+    fi
+
+    printf 'Roihu has been unmounted.\n'
+}
+
+alias umount-roihu='unmount-roihu'
+
