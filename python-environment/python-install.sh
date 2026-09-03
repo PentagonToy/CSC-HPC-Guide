@@ -10,10 +10,12 @@ set -Eeuo pipefail
 
 readonly FOAMNORDIC_REPO="https://github.com/PentagonToy/FoamNordic.git"
 readonly FOAMNORDIC_BRANCH="dev"
-readonly OPENFOAM_GCC_MODULE="gcc/15.2.0"
 readonly OPENFOAM_MPI_MODULE="openmpi/5.0.10"
 readonly OPENFOAM_MODULE="openfoam/2512"
+readonly OPENFOAM_ARM64_URL="https://github.com/PentagonToy/CSC-HPC-Guide/releases/download/file-openfoam-v2512-roihu-arm64/openfoam-v2512-roihu-arm64.tar.zst"
+readonly OPENFOAM_ARM64_SHA256="3a548427feb368d7e9ecabfc940c1ca977a4f6aefdd3a55a74e87793ce64205e"
 readonly PYTHON_VERSION="3.12"
+readonly TOTAL_STEPS=8
 
 SPINNER_PID=""
 INSTALL_LOG_DIR=""
@@ -31,7 +33,9 @@ initialize_modules() {
     if ! type module >/dev/null 2>&1; then
         export CSC_ENV_INIT_NON_INTERACTIVE=yes
         # shellcheck disable=SC1091
+        set +u
         source /etc/profile.d/zz-csc-env.sh
+        set -u
     fi
     type module >/dev/null 2>&1 || fail "CSC module environment is unavailable."
 }
@@ -108,9 +112,9 @@ run_step() {
             local index=0
 
             while true; do
-                printf '\r%s [Step %d/7] %s [%s]' \
+                printf '\r%s [Step %d/%d] %s [%s]' \
                     "${frames[index % ${#frames[@]}]}" \
-                    "$number" \
+                    "$number" "$TOTAL_STEPS" \
                     "$description" \
                     "$(format_elapsed "$((SECONDS - started))")"
                 index=$((index + 1))
@@ -119,7 +123,7 @@ run_step() {
         ) &
         SPINNER_PID=$!
     else
-        printf '[Step %d/7] %s ...\n' "$number" "$description"
+        printf '[Step %d/%d] %s ...\n' "$number" "$TOTAL_STEPS" "$description"
     fi
 
     if "$@" >"$step_log" 2>&1; then
@@ -132,19 +136,19 @@ run_step() {
 
     if [ "$status" -eq 0 ]; then
         if [ "$animated" -eq 1 ]; then
-            printf '\r✓ [Step %d/7] %s [%s]\033[K\n' \
-                "$number" "$description" "$(format_elapsed "$((SECONDS - started))")"
+            printf '\r✓ [Step %d/%d] %s [%s]\033[K\n' \
+                "$number" "$TOTAL_STEPS" "$description" "$(format_elapsed "$((SECONDS - started))")"
         else
-            printf '✓ [Step %d/7] %s [%s]\n' \
-                "$number" "$description" "$(format_elapsed "$((SECONDS - started))")"
+            printf '✓ [Step %d/%d] %s [%s]\n' \
+                "$number" "$TOTAL_STEPS" "$description" "$(format_elapsed "$((SECONDS - started))")"
         fi
     else
         if [ "$animated" -eq 1 ]; then
-            printf '\r✗ [Step %d/7] %s [%s]\033[K\n' \
-                "$number" "$description" "$(format_elapsed "$((SECONDS - started))")" >&2
+            printf '\r✗ [Step %d/%d] %s [%s]\033[K\n' \
+                "$number" "$TOTAL_STEPS" "$description" "$(format_elapsed "$((SECONDS - started))")" >&2
         else
-            printf '✗ [Step %d/7] %s [%s]\n' \
-                "$number" "$description" "$(format_elapsed "$((SECONDS - started))")" >&2
+            printf '✗ [Step %d/%d] %s [%s]\n' \
+                "$number" "$TOTAL_STEPS" "$description" "$(format_elapsed "$((SECONDS - started))")" >&2
         fi
         printf 'Step log: %s\n' "$step_log" >&2
         tail -n 240 "$step_log" >&2
@@ -175,9 +179,18 @@ collect_configuration() {
     fi
 
     print_section 'FoamNordic environment installer for CSC Roihu'
-    prompt_value "CSC project" raw_project "${CSC_PROJECT:-}"
-    prompt_value "Project user directory" PROJECT_USER_DIR "${PROJECT_USER_DIR:-}"
-    prompt_value "Environment nickname" ENV_NICKNAME "${ENV_NICKNAME:-foamnordic}"
+    if [ "${FOAMNORDIC_INSTALL_ASSUME_YES:-0}" = "1" ]; then
+        raw_project="${CSC_PROJECT:-}"
+        PROJECT_USER_DIR="${PROJECT_USER_DIR:-}"
+        ENV_NICKNAME="${ENV_NICKNAME:-foamnordic}"
+        [ -n "$raw_project" ] || fail "CSC_PROJECT is required for unattended installation."
+        [ -n "$PROJECT_USER_DIR" ] || \
+            fail "PROJECT_USER_DIR is required for unattended installation."
+    else
+        prompt_value "CSC project" raw_project "${CSC_PROJECT:-}"
+        prompt_value "Project user directory" PROJECT_USER_DIR "${PROJECT_USER_DIR:-}"
+        prompt_value "Environment nickname" ENV_NICKNAME "${ENV_NICKNAME:-foamnordic}"
+    fi
     local install_selection="${FOAMNORDIC_INSTALL_PACKAGE:-${INSTALL_FOAMNORDIC:-}}"
     if [ -n "$install_selection" ]; then
         case "$install_selection" in
@@ -209,10 +222,26 @@ collect_configuration() {
     BASE_SCRATCH="$PROJECT_ROOT/Utilities"
     PYTHON_ROOT="$BASE_SCRATCH/Python"
     MACHINE_ARCH="$(uname -m)"
-    [ "$MACHINE_ARCH" = "x86_64" ] || \
-        fail "This OpenFOAM v2512 environment targets Roihu CPU nodes (x86_64)."
+    case "$MACHINE_ARCH" in
+        x86_64)
+            OPENFOAM_GCC_MODULE="gcc/15.2.0"
+            OPENFOAM_PROVIDER="CSC module"
+            OPENFOAM_ROOT=""
+            OPENFOAM_MODULE_ROOT=""
+            ;;
+        aarch64)
+            OPENFOAM_GCC_MODULE="gcc/14.3.0"
+            OPENFOAM_PROVIDER="FoamNordic ARM64 asset"
+            OPENFOAM_ROOT="$BASE_SCRATCH/OpenFOAM/aarch64/openfoam-v2512-linux-arm64"
+            OPENFOAM_MODULE_ROOT="$HOME/.local/share/modulefiles/foamnordic/aarch64"
+            ;;
+        *)
+            fail "Unsupported Roihu architecture: $MACHINE_ARCH"
+            ;;
+    esac
     ENV_PREFIX="$PYTHON_ROOT/$MACHINE_ARCH/envs/$ENV_NICKNAME-$PYTHON_VERSION"
     BUILD_ROOT="$PYTHON_ROOT/$MACHINE_ARCH/build"
+    CACHE_ROOT="$PYTHON_ROOT/$MACHINE_ARCH/cache"
     STATE_ROOT="$PYTHON_ROOT/$MACHINE_ARCH/state"
     FOAMNORDIC_DIR="$PROJECT_ROOT/Source/FoamNordic"
     LOADER="$BASE_SCRATCH/Python4FoamNordic.sh"
@@ -225,7 +254,7 @@ collect_configuration() {
         "Environment" "$ENV_PREFIX" \
         "Install FoamNordic" "$([ "$INSTALL_FOAMNORDIC" -eq 1 ] && printf yes || printf no)" \
         "FoamNordic branch" "$([ "$INSTALL_FOAMNORDIC" -eq 1 ] && printf %s "$FOAMNORDIC_BRANCH" || printf disabled)" \
-        "OpenFOAM" "$OPENFOAM_MODULE" \
+        "OpenFOAM" "$([ "$INSTALL_FOAMNORDIC" -eq 1 ] && printf '%s (%s)' "$OPENFOAM_MODULE" "$OPENFOAM_PROVIDER" || printf disabled)" \
         "Build jobs" "$BUILD_JOBS"
 
     if [ "${FOAMNORDIC_INSTALL_ASSUME_YES:-0}" != "1" ]; then
@@ -235,8 +264,9 @@ collect_configuration() {
     fi
 
     export CSC_PROJECT PROJECT_USER_DIR ENV_NICKNAME
-    export PROJECT_ROOT BASE_SCRATCH PYTHON_ROOT MACHINE_ARCH ENV_PREFIX BUILD_ROOT STATE_ROOT
+    export PROJECT_ROOT BASE_SCRATCH PYTHON_ROOT MACHINE_ARCH ENV_PREFIX BUILD_ROOT CACHE_ROOT STATE_ROOT
     export FOAMNORDIC_DIR BUILD_JOBS INSTALL_FOAMNORDIC
+    export OPENFOAM_GCC_MODULE OPENFOAM_PROVIDER OPENFOAM_ROOT OPENFOAM_MODULE_ROOT
 }
 
 prepare_directories() {
@@ -246,7 +276,11 @@ prepare_directories() {
         "$HOME/.local/share/jupyter/kernels" \
         "$PROJECT_ROOT/Source" \
         "$BUILD_ROOT" \
+        "$CACHE_ROOT" \
         "$STATE_ROOT"
+    if [ -n "$OPENFOAM_MODULE_ROOT" ]; then
+        mkdir -p "$OPENFOAM_MODULE_ROOT/openfoam"
+    fi
 
     cat > "$HOME/.config/csc-hpc/identity.sh" <<EOF
 export CSC_PROJECT="$CSC_PROJECT"
@@ -294,7 +328,6 @@ lightgbm
 mlflow
 optuna
 scikit-learn
-scikit-learn-intelex
 shap
 skl2onnx
 statsmodels
@@ -356,6 +389,11 @@ twine
 typing-extensions
 EOF
 
+    if [ "$MACHINE_ARCH" = "x86_64" ]; then
+        printf '\n# Intel acceleration (x86_64 only)\nscikit-learn-intelex\n' \
+            >> "$PYTHON_ROOT/requirements.in"
+    fi
+
     cat > "$PYTHON_ROOT/install-foamnordic.sh" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -364,7 +402,13 @@ set -Eeuo pipefail
 : "${FOAMNORDIC_REPO:?}"
 : "${FOAMNORDIC_BRANCH:?}"
 : "${PYTHON_ROOT:?}"
+: "${CACHE_ROOT:?}"
 : "${STATE_ROOT:?}"
+
+export UV_CACHE_DIR="$CACHE_ROOT/uv"
+export PIP_CACHE_DIR="$CACHE_ROOT/pip"
+export XDG_CACHE_HOME="$CACHE_ROOT/xdg"
+mkdir -p "$UV_CACHE_DIR" "$PIP_CACHE_DIR" "$XDG_CACHE_HOME"
 
 python -m pip install --disable-pip-version-check --progress-bar off uv
 uv pip install --link-mode=copy --requirements "$PYTHON_ROOT/requirements.in"
@@ -409,7 +453,7 @@ build_tykky_environment() {
     export CW_BUILD_TMPDIR="$BUILD_ROOT"
     export TMPDIR="$BUILD_ROOT"
     export FOAMNORDIC_REPO FOAMNORDIC_BRANCH FOAMNORDIC_DIR INSTALL_FOAMNORDIC
-    export PYTHON_ROOT STATE_ROOT
+    export PYTHON_ROOT CACHE_ROOT STATE_ROOT
 
     conda-containerize new \
         --prefix "$ENV_PREFIX" \
@@ -420,11 +464,125 @@ build_tykky_environment() {
     test -x "$ENV_PREFIX/bin/python"
 }
 
+prepare_openfoam() {
+    [ "$INSTALL_FOAMNORDIC" -eq 1 ] || return 0
+    [ "$MACHINE_ARCH" = "aarch64" ] || return 0
+
+    local openfoam_parent="$BASE_SCRATCH/OpenFOAM/aarch64"
+    local download_dir="$BASE_SCRATCH/OpenFOAM/downloads"
+    local archive="$download_dir/openfoam-v2512-roihu-arm64.tar.zst"
+    local staging
+    mkdir -p "$openfoam_parent" "$download_dir" "$OPENFOAM_MODULE_ROOT/openfoam"
+
+    if [ ! -f "$archive" ] || \
+        [ "$(sha256sum "$archive" | awk '{print $1}')" != "$OPENFOAM_ARM64_SHA256" ]; then
+        require_command curl
+        rm -f "$archive.part"
+        curl --fail --location --retry 3 \
+            --output "$archive.part" "$OPENFOAM_ARM64_URL"
+        printf '%s  %s\n' "$OPENFOAM_ARM64_SHA256" "$archive.part" | sha256sum --check
+        mv "$archive.part" "$archive"
+    fi
+
+    if [ ! -f "$OPENFOAM_ROOT/OpenFOAM-v2512/etc/bashrc" ]; then
+        [ ! -e "$OPENFOAM_ROOT" ] || \
+            fail "Incomplete OpenFOAM installation already exists: $OPENFOAM_ROOT"
+        staging="$(mktemp -d "$openfoam_parent/.openfoam-v2512.XXXXXX")"
+        tar --zstd --extract --file "$archive" --directory "$staging"
+        test -f "$staging/openfoam-v2512-linux-arm64/OpenFOAM-v2512/etc/bashrc" || \
+            fail "The OpenFOAM ARM64 archive has an unexpected layout."
+        mv "$staging/openfoam-v2512-linux-arm64" "$OPENFOAM_ROOT"
+        rmdir "$staging"
+    fi
+
+    cat > "$OPENFOAM_MODULE_ROOT/openfoam/2512.lua" <<EOF
+help([[OpenFOAM v2512 runtime for CSC Roihu ARM64 nodes.]])
+whatis("Name: OpenFOAM")
+whatis("Version: v2512")
+family("openfoam")
+depends_on("$OPENFOAM_GCC_MODULE")
+depends_on("$OPENFOAM_MPI_MODULE")
+
+local root = "$OPENFOAM_ROOT"
+local project = pathJoin(root, "OpenFOAM-v2512")
+local thirdParty = pathJoin(root, "ThirdParty-v2512")
+local platform = "linuxARM64GccDPInt32Opt"
+local userRoot = pathJoin(os.getenv("HOME"), "OpenFOAM", os.getenv("USER") .. "-v2512")
+local appBin = pathJoin(project, "platforms", platform, "bin")
+local libBin = pathJoin(project, "platforms", platform, "lib")
+local siteRoot = pathJoin(project, "site", "2512", "platforms", platform)
+local thirdPartyLib = pathJoin(thirdParty, "platforms", "linuxARM64GccDPInt32", "lib")
+local thirdPartyGcc = pathJoin(thirdParty, "platforms", "linuxARM64Gcc")
+
+setenv("FOAM_API", "2512")
+setenv("FOAM_APP", pathJoin(project, "applications"))
+setenv("FOAM_APPBIN", appBin)
+setenv("FOAM_ETC", pathJoin(project, "etc"))
+setenv("FOAM_EXT_LIBBIN", thirdPartyLib)
+setenv("FOAM_LIBBIN", libBin)
+setenv("FOAM_MPI", "sys-openmpi")
+setenv("FOAM_RUN", pathJoin(userRoot, "run"))
+setenv("FOAM_SITE_APPBIN", pathJoin(siteRoot, "bin"))
+setenv("FOAM_SITE_LIBBIN", pathJoin(siteRoot, "lib"))
+setenv("FOAM_SOLVERS", pathJoin(project, "applications", "solvers"))
+setenv("FOAM_SRC", pathJoin(project, "src"))
+setenv("FOAM_TUTORIALS", pathJoin(project, "tutorials"))
+setenv("FOAM_USER_APPBIN", pathJoin(userRoot, "platforms", platform, "bin"))
+setenv("FOAM_USER_LIBBIN", pathJoin(userRoot, "platforms", platform, "lib"))
+setenv("FOAM_UTILITIES", pathJoin(project, "applications", "utilities"))
+setenv("WM_ARCH", "linuxARM64")
+setenv("WM_COMPILE_OPTION", "Opt")
+setenv("WM_COMPILER", "Gcc")
+setenv("WM_COMPILER_LIB_ARCH", "64")
+setenv("WM_COMPILER_TYPE", "system")
+setenv("WM_DIR", pathJoin(project, "wmake"))
+setenv("WM_LABEL_OPTION", "Int32")
+setenv("WM_LABEL_SIZE", "32")
+setenv("WM_MPLIB", "SYSTEMOPENMPI")
+setenv("WM_OPTIONS", platform)
+setenv("WM_PRECISION_OPTION", "DP")
+setenv("WM_PROJECT", "OpenFOAM")
+setenv("WM_PROJECT_DIR", project)
+setenv("WM_PROJECT_USER_DIR", userRoot)
+setenv("WM_PROJECT_VERSION", "v2512")
+setenv("WM_THIRD_PARTY_DIR", thirdParty)
+
+prepend_path("PATH", pathJoin(thirdPartyGcc, "ADIOS2-2.10.1", "bin"))
+prepend_path("PATH", pathJoin(userRoot, "platforms", platform, "bin"))
+prepend_path("PATH", pathJoin(siteRoot, "bin"))
+prepend_path("PATH", appBin)
+prepend_path("PATH", pathJoin(project, "bin"))
+prepend_path("PATH", pathJoin(project, "wmake"))
+prepend_path("LD_LIBRARY_PATH", pathJoin(userRoot, "platforms", platform, "lib"))
+prepend_path("LD_LIBRARY_PATH", pathJoin(siteRoot, "lib"))
+prepend_path("LD_LIBRARY_PATH", pathJoin(libBin, "sys-openmpi"))
+prepend_path("LD_LIBRARY_PATH", libBin)
+prepend_path("LD_LIBRARY_PATH", pathJoin(thirdPartyLib, "sys-openmpi"))
+prepend_path("LD_LIBRARY_PATH", thirdPartyLib)
+prepend_path("LD_LIBRARY_PATH", pathJoin(thirdPartyGcc, "fftw-3.3.10", "lib"))
+prepend_path("LD_LIBRARY_PATH", pathJoin(thirdPartyGcc, "CGAL-4.14.3", "lib64"))
+prepend_path("LD_LIBRARY_PATH", pathJoin(thirdPartyGcc, "boost_1_74_0", "lib64"))
+prepend_path("LD_LIBRARY_PATH", pathJoin(thirdPartyGcc, "ADIOS2-2.10.1", "lib64"))
+EOF
+    chmod 644 "$OPENFOAM_MODULE_ROOT/openfoam/2512.lua"
+
+    initialize_modules
+    module use "$OPENFOAM_MODULE_ROOT"
+    module load "$OPENFOAM_MODULE"
+    [ "${WM_PROJECT_VERSION:-}" = "v2512" ] || \
+        fail "The ARM64 OpenFOAM module did not activate v2512."
+    command -v simpleFoam >/dev/null 2>&1 || \
+        fail "The ARM64 OpenFOAM runtime does not provide simpleFoam."
+}
+
 build_foamnordic() {
     [ "$INSTALL_FOAMNORDIC" -eq 1 ] || return 0
 
     initialize_modules
     module --force purge
+    if [ -n "$OPENFOAM_MODULE_ROOT" ]; then
+        module use "$OPENFOAM_MODULE_ROOT"
+    fi
     module load \
         "$OPENFOAM_GCC_MODULE" \
         "$OPENFOAM_MPI_MODULE" \
@@ -481,18 +639,34 @@ export PYTHONNOUSERSITE=1
     return 1
 }
 
-if ! type module >/dev/null 2>&1; then
-    export CSC_ENV_INIT_NON_INTERACTIVE=yes
-    # shellcheck disable=SC1091
-    source /etc/profile.d/zz-csc-env.sh
-fi
-type module >/dev/null 2>&1 || {
-    printf 'CSC module environment is unavailable.\n' >&2
-    return 1
-}
+if [ "${INSTALL_FOAMNORDIC:-1}" -eq 1 ]; then
+    if ! type module >/dev/null 2>&1; then
+        export CSC_ENV_INIT_NON_INTERACTIVE=yes
+        # shellcheck disable=SC1091
+        set +u
+        source /etc/profile.d/zz-csc-env.sh
+        set -u
+    fi
+    type module >/dev/null 2>&1 || {
+        printf 'CSC module environment is unavailable.\n' >&2
+        return 1
+    }
 
-module --force purge
-module load gcc/15.2.0 openmpi/5.0.10 openfoam/2512
+    module --force purge
+    case "$MACHINE_ARCH" in
+        x86_64)
+            module load gcc/15.2.0 openmpi/5.0.10 openfoam/2512
+            ;;
+        aarch64)
+            module use "$HOME/.local/share/modulefiles/foamnordic/aarch64"
+            module load openfoam/2512
+            ;;
+        *)
+            printf 'Unsupported Roihu architecture: %s\n' "$MACHINE_ARCH" >&2
+            return 1
+            ;;
+    esac
+fi
 
 case ":${PATH:-}:" in
     *":$HOME/bin:"*) ;;
@@ -512,8 +686,11 @@ case ":${PYTHONPATH:-}:" in
 esac
 
 if [ "${FOAMNORDIC_ENV_QUIET:-0}" != "1" ]; then
-    printf 'FoamNordic environment loaded: %s (%s), OpenFOAM %s\n' \
-        "$ENV_NICKNAME" "$MACHINE_ARCH" "${WM_PROJECT_VERSION:-unknown}"
+    printf 'Python environment loaded: %s (%s)' "$ENV_NICKNAME" "$MACHINE_ARCH"
+    if [ "${INSTALL_FOAMNORDIC:-1}" -eq 1 ]; then
+        printf ', OpenFOAM %s' "${WM_PROJECT_VERSION:-unknown}"
+    fi
+    printf '\n'
 fi
 
 unset identity_file
@@ -693,10 +870,11 @@ main() {
     run_step 1 "Preparing directories" prepare_directories
     run_step 2 "Writing Tykky configuration" write_environment_files
     run_step 3 "Building the Tykky environment" build_tykky_environment
-    run_step 4 "Building FoamNordic for OpenFOAM v2512" build_foamnordic
-    run_step 5 "Writing the environment loader" write_loader
-    run_step 6 "Registering the Jupyter kernel" register_kernel
-    run_step 7 "Validating the installation" validate_installation
+    run_step 4 "Preparing OpenFOAM v2512" prepare_openfoam
+    run_step 5 "Building FoamNordic for OpenFOAM v2512" build_foamnordic
+    run_step 6 "Writing the environment loader" write_loader
+    run_step 7 "Registering the Jupyter kernel" register_kernel
+    run_step 8 "Validating the installation" validate_installation
 
     print_section 'Completed'
     printf 'Installation completed in %s.\n' "$(format_elapsed "$((SECONDS - started))")"

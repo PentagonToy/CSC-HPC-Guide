@@ -2,8 +2,8 @@
 
 This installer creates a Python 3.12 environment for FoamNordic with CSC
 Tykky. It follows the `dev` branch and keeps FoamNordic as an editable
-installation. The fixed OpenFOAM module stack targets Roihu CPU (`x86_64`)
-nodes.
+installation. Both Roihu CPU (`x86_64`) and GPU (`aarch64`) login environments
+are supported.
 
 ## Included
 
@@ -13,6 +13,7 @@ nodes.
 - An optional editable checkout of
   `https://github.com/PentagonToy/FoamNordic.git` on `dev`
 - FoamNordic native components built against `openfoam/2512`
+- An ARM64 OpenFOAM v2512 runtime and user module on Roihu GPU
 - A Jupyter kernel and reusable environment loader
 - `update-python` for lightweight package updates without rebuilding Tykky
 - A lightweight installation spinner with per-step elapsed time
@@ -72,6 +73,16 @@ FOAMNORDIC_INSTALL_ASSUME_YES=1 \
 Set `FOAMNORDIC_INSTALL_PACKAGE=no` to create the Python environment without
 installing or building FoamNordic.
 
+The installer selects architecture-specific software automatically:
+
+| Login environment | Architecture | Compiler | OpenFOAM provider |
+| --- | --- | --- | --- |
+| Roihu CPU | `x86_64` | GCC 15.2.0 | CSC `openfoam/2512` module |
+| Roihu GPU | `aarch64` | GCC 14.3.0 | CSC-HPC-Guide ARM64 release asset |
+
+`scikit-learn-intelex` is installed only on `x86_64`. It is omitted on ARM64
+because its native runtime is not available for that architecture.
+
 ## Load
 
 After installation:
@@ -80,9 +91,18 @@ After installation:
 source "/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities/Python4FoamNordic.sh"
 ```
 
-The loader activates the Tykky environment and loads `gcc/15.2.0`,
-`openmpi/5.0.10`, and `openfoam/2512`. It can be sourced from login nodes,
+The loader activates the Tykky environment and loads the matching compiler,
+`openmpi/5.0.10`, and `openfoam/2512`. On ARM64, the installer creates a
+private module tree and adds it only on ARM nodes, so the same module name does
+not shadow CSC's x86_64 module. The loader can be sourced from login nodes,
 interactive allocations, and Slurm jobs.
+
+For a manual ARM64 OpenFOAM-only shell:
+
+```bash
+module use "$HOME/.local/share/modulefiles/foamnordic/aarch64"
+module load openfoam/2512
+```
 
 Confirm the active installation with:
 
@@ -142,7 +162,7 @@ dependencies, rerun the full installer.
 
 ## Update
 
-The legacy repository update helper can also be used:
+The legacy repository update helper is retained for existing x86_64 installs:
 
 ```bash
 bash /scratch/<allocation-account>/<user>/Source/update-foamnordic-ref.sh
@@ -174,6 +194,7 @@ environment, runtime, and adapter use one explicit ABI.
 
 ```text
 Utilities/
+├── OpenFOAM/aarch64/openfoam-v2512-linux-arm64/  # ARM64 only
 ├── Python4FoamNordic.sh
 └── Python/
     ├── environment.yml
@@ -181,6 +202,7 @@ Utilities/
     ├── install-foamnordic.sh
     └── <architecture>/
         ├── build/
+        ├── cache/
         ├── envs/<nickname>-3.12/
         ├── overlays/<nickname>-3.12/
         └── state/
@@ -190,14 +212,25 @@ Utilities/
 
 Installation rebuilds the selected Tykky environment. The editable checkout
 remains separate and is reused only when it is clean.
+Package and build caches are kept under the architecture-specific scratch
+tree instead of the quota-limited home directory.
 
 ## Troubleshooting
 
-If `wmake` is unavailable:
+If `wmake` is unavailable on x86_64:
 
 ```bash
 module --force purge
 module load gcc/15.2.0 openmpi/5.0.10 openfoam/2512
+echo "$WM_PROJECT_VERSION"
+which wmake
+```
+
+On ARM64:
+
+```bash
+module use "$HOME/.local/share/modulefiles/foamnordic/aarch64"
+module load openfoam/2512
 echo "$WM_PROJECT_VERSION"
 which wmake
 ```
