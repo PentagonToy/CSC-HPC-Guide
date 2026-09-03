@@ -14,6 +14,7 @@ nodes.
   `https://github.com/PentagonToy/FoamNordic.git` on `dev`
 - FoamNordic native components built against `openfoam/2512`
 - A Jupyter kernel and reusable environment loader
+- `update-python` for lightweight package updates without rebuilding Tykky
 - A lightweight installation spinner with per-step elapsed time
 - Per-step logs under `Utilities/Python/logs/install-<timestamp>`
 
@@ -89,6 +90,38 @@ foamnordic doctor
 
 The package path must point into `Source/FoamNordic/python/foamnordic`.
 
+## Update Python packages
+
+Update or add ordinary packages without rebuilding the Tykky environment:
+
+```bash
+update-python scikit-learn
+update-python "numpy<3" pandas
+```
+
+Install a local project in editable mode with:
+
+```bash
+update-python --editable /scratch/<allocation-account>/<user>/Source/MyProject
+```
+
+List packages in the writable update layer:
+
+```bash
+update-python --list
+```
+
+The command uses `uv` and writes architecture-specific overrides to:
+
+```text
+/scratch/<allocation-account>/<user>/Utilities/Python/<architecture>/overlays/<nickname>-3.12
+```
+
+The loader puts this directory before the immutable Tykky environment on
+`PYTHONPATH`. FoamNordic itself is already editable and should be updated with
+the dedicated repository updater below. If FoamNordic changes its declared
+dependencies, rerun the full installer.
+
 ## Update
 
 Use the update helper:
@@ -131,6 +164,7 @@ Utilities/
     └── <architecture>/
         ├── build/
         ├── envs/<nickname>-3.12/
+        ├── overlays/<nickname>-3.12/
         └── state/
             ├── jupyter-kernel.sh
             └── requirements.txt

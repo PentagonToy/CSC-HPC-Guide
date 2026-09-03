@@ -201,6 +201,7 @@ collect_configuration() {
 prepare_directories() {
     mkdir -p \
         "$HOME/.config/csc-hpc" \
+        "$HOME/bin" \
         "$HOME/.local/share/jupyter/kernels" \
         "$PROJECT_ROOT/Source" \
         "$BUILD_ROOT" \
@@ -411,6 +412,7 @@ export PYTHON_ROOT="$BASE_SCRATCH/Python"
 export MACHINE_ARCH="$(uname -m)"
 export ENV_PREFIX="$PYTHON_ROOT/$MACHINE_ARCH/envs/$ENV_NICKNAME-3.12"
 export FOAMNORDIC_DIR="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Source/FoamNordic"
+export PYTHON_OVERLAY="$PYTHON_ROOT/$MACHINE_ARCH/overlays/$ENV_NICKNAME-3.12"
 export PYTHONNOUSERSITE=1
 
 [ -x "$ENV_PREFIX/bin/python" ] || {
@@ -432,8 +434,20 @@ module --force purge
 module load gcc/15.2.0 openmpi/5.0.10 openfoam/2512
 
 case ":${PATH:-}:" in
+    *":$HOME/bin:"*) ;;
+    *) export PATH="$HOME/bin${PATH:+:$PATH}" ;;
+esac
+case ":${PATH:-}:" in
     *":$ENV_PREFIX/bin:"*) ;;
     *) export PATH="$ENV_PREFIX/bin${PATH:+:$PATH}" ;;
+esac
+case ":${PATH:-}:" in
+    *":$PYTHON_OVERLAY/bin:"*) ;;
+    *) export PATH="$PYTHON_OVERLAY/bin${PATH:+:$PATH}" ;;
+esac
+case ":${PYTHONPATH:-}:" in
+    *":$PYTHON_OVERLAY:"*) ;;
+    *) export PYTHONPATH="$PYTHON_OVERLAY${PYTHONPATH:+:$PYTHONPATH}" ;;
 esac
 
 if [ "${FOAMNORDIC_ENV_QUIET:-0}" != "1" ]; then
@@ -444,6 +458,72 @@ fi
 unset identity_file
 EOF
     chmod 750 "$LOADER"
+
+    cat > "$HOME/bin/update-python" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+readonly LOADER="$LOADER"
+
+usage() {
+    cat <<'USAGE'
+Usage:
+  update-python <package> [package ...]
+  update-python --editable <local-project>
+  update-python --list
+
+Packages are installed with uv into a writable overlay. The Tykky base
+environment is not rebuilt. Update FoamNordic with update-foamnordic-ref.sh.
+USAGE
+}
+
+case "\${1:-}" in
+    -h|--help)
+        usage
+        exit 0
+        ;;
+    "")
+        usage >&2
+        exit 2
+        ;;
+esac
+
+export FOAMNORDIC_ENV_QUIET=1
+# shellcheck disable=SC1090
+source "\$LOADER"
+unset FOAMNORDIC_ENV_QUIET
+
+mkdir -p "\$PYTHON_OVERLAY"
+
+if [ "\$1" = "--list" ]; then
+    uv pip freeze --path "\$PYTHON_OVERLAY"
+    exit 0
+fi
+
+if [ "\$1" = "--editable" ] || [ "\$1" = "-e" ]; then
+    [ "\$#" -eq 2 ] || {
+        printf 'Error: --editable requires exactly one local project path.\n' >&2
+        exit 2
+    }
+    uv pip install \
+        --python "\$ENV_PREFIX/bin/python" \
+        --target "\$PYTHON_OVERLAY" \
+        --link-mode=copy \
+        --upgrade \
+        --editable "\$2"
+else
+    uv pip install \
+        --python "\$ENV_PREFIX/bin/python" \
+        --target "\$PYTHON_OVERLAY" \
+        --link-mode=copy \
+        --upgrade \
+        "\$@"
+fi
+
+python -m pip check
+printf 'Python overlay: %s\n' "\$PYTHON_OVERLAY"
+EOF
+    chmod 750 "$HOME/bin/update-python"
 }
 
 register_kernel() {
