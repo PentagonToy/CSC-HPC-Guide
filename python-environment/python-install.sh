@@ -61,6 +61,27 @@ format_elapsed() {
         "$((seconds % 60))"
 }
 
+print_section() {
+    printf '\n======================================================================\n'
+    printf ' %s\n' "$1"
+    printf '======================================================================\n'
+}
+
+prompt_yes_no() {
+    local prompt="$1"
+    local variable="$2"
+    local default_value="${3:-yes}"
+    local answer
+
+    read -r -p "$prompt [Y/n]: " answer
+    answer="${answer:-$default_value}"
+    case "$answer" in
+        [Yy]|[Yy][Ee][Ss]) printf -v "$variable" '%s' 1 ;;
+        [Nn]|[Nn][Oo]) printf -v "$variable" '%s' 0 ;;
+        *) fail "Answer yes or no for: $prompt" ;;
+    esac
+}
+
 stop_spinner() {
     if [ -n "${SPINNER_PID:-}" ]; then
         kill "$SPINNER_PID" 2>/dev/null || true
@@ -153,10 +174,22 @@ collect_configuration() {
         source "$identity_file"
     fi
 
-    printf '%s\n' 'FoamNordic environment installer for CSC Roihu'
+    print_section 'FoamNordic environment installer for CSC Roihu'
     prompt_value "CSC project" raw_project "${CSC_PROJECT:-}"
     prompt_value "Project user directory" PROJECT_USER_DIR "${PROJECT_USER_DIR:-}"
     prompt_value "Environment nickname" ENV_NICKNAME "${ENV_NICKNAME:-foamnordic}"
+    local install_selection="${FOAMNORDIC_INSTALL_PACKAGE:-${INSTALL_FOAMNORDIC:-}}"
+    if [ -n "$install_selection" ]; then
+        case "$install_selection" in
+            1|yes|YES|true|TRUE) INSTALL_FOAMNORDIC=1 ;;
+            0|no|NO|false|FALSE) INSTALL_FOAMNORDIC=0 ;;
+            *) fail "FOAMNORDIC_INSTALL_PACKAGE must be yes or no." ;;
+        esac
+    elif [ "${FOAMNORDIC_INSTALL_ASSUME_YES:-0}" = "1" ]; then
+        INSTALL_FOAMNORDIC=1
+    else
+        prompt_yes_no "Install FoamNordic" INSTALL_FOAMNORDIC yes
+    fi
 
     if [[ "$raw_project" == project_* ]]; then
         CSC_PROJECT="$raw_project"
@@ -184,12 +217,14 @@ collect_configuration() {
     FOAMNORDIC_DIR="$PROJECT_ROOT/Source/FoamNordic"
     LOADER="$BASE_SCRATCH/Python4FoamNordic.sh"
 
-    printf '\n%-22s %s\n' \
+    print_section 'Installation summary'
+    printf '%-22s %s\n' \
         "Project" "$CSC_PROJECT" \
         "Project directory" "$PROJECT_USER_DIR" \
         "Architecture" "$MACHINE_ARCH" \
         "Environment" "$ENV_PREFIX" \
-        "FoamNordic branch" "$FOAMNORDIC_BRANCH" \
+        "Install FoamNordic" "$([ "$INSTALL_FOAMNORDIC" -eq 1 ] && printf yes || printf no)" \
+        "FoamNordic branch" "$([ "$INSTALL_FOAMNORDIC" -eq 1 ] && printf %s "$FOAMNORDIC_BRANCH" || printf disabled)" \
         "OpenFOAM" "$OPENFOAM_MODULE" \
         "Build jobs" "$BUILD_JOBS"
 
@@ -201,7 +236,7 @@ collect_configuration() {
 
     export CSC_PROJECT PROJECT_USER_DIR ENV_NICKNAME
     export PROJECT_ROOT BASE_SCRATCH PYTHON_ROOT MACHINE_ARCH ENV_PREFIX BUILD_ROOT STATE_ROOT
-    export FOAMNORDIC_DIR BUILD_JOBS
+    export FOAMNORDIC_DIR BUILD_JOBS INSTALL_FOAMNORDIC
 }
 
 prepare_directories() {
@@ -217,6 +252,7 @@ prepare_directories() {
 export CSC_PROJECT="$CSC_PROJECT"
 export PROJECT_USER_DIR="$PROJECT_USER_DIR"
 export ENV_NICKNAME="$ENV_NICKNAME"
+export INSTALL_FOAMNORDIC="$INSTALL_FOAMNORDIC"
 EOF
     chmod 600 "$HOME/.config/csc-hpc/identity.sh"
 }
@@ -333,6 +369,12 @@ set -Eeuo pipefail
 python -m pip install --disable-pip-version-check --progress-bar off uv
 uv pip install --link-mode=copy --requirements "$PYTHON_ROOT/requirements.in"
 
+if [ "${INSTALL_FOAMNORDIC:-1}" -eq 0 ]; then
+    uv pip check
+    python -m pip list --format=freeze | sort > "$STATE_ROOT/requirements.txt"
+    exit 0
+fi
+
 if [ -d "$FOAMNORDIC_DIR/.git" ]; then
     [ -z "$(git -C "$FOAMNORDIC_DIR" status --porcelain)" ] || {
         printf 'FoamNordic checkout has local changes: %s\n' "$FOAMNORDIC_DIR" >&2
@@ -366,7 +408,7 @@ build_tykky_environment() {
 
     export CW_BUILD_TMPDIR="$BUILD_ROOT"
     export TMPDIR="$BUILD_ROOT"
-    export FOAMNORDIC_REPO FOAMNORDIC_BRANCH FOAMNORDIC_DIR
+    export FOAMNORDIC_REPO FOAMNORDIC_BRANCH FOAMNORDIC_DIR INSTALL_FOAMNORDIC
     export PYTHON_ROOT STATE_ROOT
 
     conda-containerize new \
@@ -379,6 +421,8 @@ build_tykky_environment() {
 }
 
 build_foamnordic() {
+    [ "$INSTALL_FOAMNORDIC" -eq 1 ] || return 0
+
     initialize_modules
     module --force purge
     module load \
@@ -486,11 +530,13 @@ usage() {
     cat <<'USAGE'
 Usage:
   update-python <package> [package ...]
+  update-python foamnordic
   update-python --editable <local-project>
   update-python --list
 
 Packages are installed with uv into a writable overlay. The Tykky base
-environment is not rebuilt. Update FoamNordic with update-foamnordic-ref.sh.
+environment is not rebuilt. FoamNordic is updated from its editable Git
+checkout and its persistent native runtime is rebuilt separately.
 USAGE
 }
 
@@ -507,8 +553,60 @@ esac
 
 export FOAMNORDIC_ENV_QUIET=1
 # shellcheck disable=SC1090
+set +u
 source "\$LOADER"
+set -u
 unset FOAMNORDIC_ENV_QUIET
+
+case "\$1" in
+foamnordic)
+    [ "\$#" -eq 1 ] || {
+        printf 'Error: update FoamNordic separately from other packages.\n' >&2
+        exit 2
+    }
+    [ "\${INSTALL_FOAMNORDIC:-1}" -eq 1 ] || {
+        printf 'Error: FoamNordic was not selected during installation.\n' >&2
+        exit 2
+    }
+    [ -d "\$FOAMNORDIC_DIR/.git" ] || {
+        printf 'Error: FoamNordic checkout not found: %s\n' "\$FOAMNORDIC_DIR" >&2
+        exit 1
+    }
+    [ -z "\$(git -C "\$FOAMNORDIC_DIR" status --porcelain)" ] || {
+        git -C "\$FOAMNORDIC_DIR" status --short
+        printf 'Error: FoamNordic checkout contains local changes.\n' >&2
+        exit 1
+    }
+
+    git -C "\$FOAMNORDIC_DIR" fetch origin "$FOAMNORDIC_BRANCH"
+    git -C "\$FOAMNORDIC_DIR" switch "$FOAMNORDIC_BRANCH"
+    git -C "\$FOAMNORDIC_DIR" merge --ff-only "origin/$FOAMNORDIC_BRANCH"
+
+    native_path=""
+    while IFS= read -r path_entry; do
+        case "\$path_entry" in
+            "\$ENV_PREFIX/bin"|"\$PYTHON_OVERLAY/bin") continue ;;
+        esac
+        native_path="\${native_path:+\$native_path:}\$path_entry"
+    done < <(printf '%s' "\$PATH" | tr ':' '\n')
+
+    FOAMNORDIC_NATIVE_PATH="\$native_path" "\$ENV_PREFIX/bin/python" -c '
+import os
+import sys
+
+os.environ["PATH"] = os.environ.pop("FOAMNORDIC_NATIVE_PATH")
+from foamnordic._cli import main
+
+raise SystemExit(main(sys.argv[1:]))
+' build --source "\$FOAMNORDIC_DIR"
+    foamnordic doctor
+    exit 0
+    ;;
+foamnordic==*|foamnordic@*)
+    printf 'Error: use exactly "update-python foamnordic" for the editable checkout.\n' >&2
+    exit 2
+    ;;
+esac
 
 mkdir -p "\$PYTHON_OVERLAY"
 
@@ -568,6 +666,11 @@ EOF
 
 validate_installation() {
     FOAMNORDIC_ENV_QUIET=1 source "$LOADER"
+    if [ "$INSTALL_FOAMNORDIC" -eq 0 ]; then
+        python --version
+        python -m pip check
+        return 0
+    fi
     python - <<'PY'
 from pathlib import Path
 import foamnordic
@@ -586,6 +689,7 @@ main() {
     collect_configuration
     INSTALL_LOG_DIR="$PYTHON_ROOT/logs/install-$(date '+%Y%m%d-%H%M%S')"
     mkdir -p "$INSTALL_LOG_DIR"
+    print_section 'Installation'
     run_step 1 "Preparing directories" prepare_directories
     run_step 2 "Writing Tykky configuration" write_environment_files
     run_step 3 "Building the Tykky environment" build_tykky_environment
@@ -594,9 +698,14 @@ main() {
     run_step 6 "Registering the Jupyter kernel" register_kernel
     run_step 7 "Validating the installation" validate_installation
 
-    printf '\nInstallation completed in %s.\n' "$(format_elapsed "$((SECONDS - started))")"
+    print_section 'Completed'
+    printf 'Installation completed in %s.\n' "$(format_elapsed "$((SECONDS - started))")"
     printf 'Load with: source "%s"\n' "$LOADER"
-    printf 'FoamNordic source: %s (%s)\n' "$FOAMNORDIC_DIR" "$FOAMNORDIC_BRANCH"
+    if [ "$INSTALL_FOAMNORDIC" -eq 1 ]; then
+        printf 'FoamNordic source: %s (%s)\n' "$FOAMNORDIC_DIR" "$FOAMNORDIC_BRANCH"
+    else
+        printf '%s\n' 'FoamNordic: not installed'
+    fi
     printf 'Installation logs: %s\n' "$INSTALL_LOG_DIR"
 }
 

@@ -10,7 +10,7 @@ nodes.
 - A Tykky-managed Python 3.12 environment
 - Scientific Python, JAX, scikit-learn, ONNX, Cantera, and visualisation tools
 - `pyvista`, `vtk`, and `trame` for interactive visualisation
-- An editable checkout of
+- An optional editable checkout of
   `https://github.com/PentagonToy/FoamNordic.git` on `dev`
 - FoamNordic native components built against `openfoam/2512`
 - A Jupyter kernel and reusable environment loader
@@ -38,7 +38,8 @@ Do not source the installer. Check its shell syntax with:
 ./python-install.sh --check
 ```
 
-It asks for the CSC project, project directory name, and environment nickname.
+It asks for the CSC project, project directory name, environment nickname, and
+whether FoamNordic should be installed. FoamNordic is enabled by default.
 The resulting environment is stored at:
 
 ```text
@@ -67,6 +68,9 @@ ENV_NICKNAME="foamnordic" \
 FOAMNORDIC_INSTALL_ASSUME_YES=1 \
 ./python-install.sh
 ```
+
+Set `FOAMNORDIC_INSTALL_PACKAGE=no` to create the Python environment without
+installing or building FoamNordic.
 
 ## Load
 
@@ -99,6 +103,9 @@ update-python scikit-learn
 update-python "numpy<3" pandas
 ```
 
+These are regular installations in the writable overlay. They are editable
+only when `--editable` is explicitly used.
+
 Install a local project in editable mode with:
 
 ```bash
@@ -111,7 +118,18 @@ List packages in the writable update layer:
 update-python --list
 ```
 
-The command uses `uv` and writes architecture-specific overrides to:
+Do not install FoamNordic into the overlay. It has a dedicated update path:
+
+```bash
+update-python foamnordic
+```
+
+This fast-forwards the editable `FoamNordic/dev` checkout, rebuilds the
+persistent native runtime using the Roihu OpenFOAM toolchain, and runs
+`foamnordic doctor`.
+
+For ordinary packages, the command uses `uv` and writes
+architecture-specific overrides to:
 
 ```text
 /scratch/<allocation-account>/<user>/Utilities/Python/<architecture>/overlays/<nickname>-3.12
@@ -124,7 +142,7 @@ dependencies, rerun the full installer.
 
 ## Update
 
-Use the update helper:
+The legacy repository update helper can also be used:
 
 ```bash
 bash /scratch/<allocation-account>/<user>/Source/update-foamnordic-ref.sh
@@ -142,15 +160,15 @@ not rewrite commits or discard local work.
 Rerun the full installer when FoamNordic adds or changes Python dependencies;
 ordinary source updates only require the lightweight updater.
 
-## Manual native rebuild
+## Native rebuild
 
 ```bash
-source "/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities/Python4FoamNordic.sh"
-foamnordic build --source "$FOAMNORDIC_DIR"
+update-python foamnordic
 ```
 
-OpenFOAM is fixed to v2512 so the environment, runtime, and adapter use one
-explicit ABI.
+This route keeps Tykky's Python packages while excluding its Conda compiler
+and linker from the native OpenFOAM build. OpenFOAM is fixed to v2512 so the
+environment, runtime, and adapter use one explicit ABI.
 
 ## Generated layout
 
