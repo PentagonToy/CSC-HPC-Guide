@@ -453,6 +453,58 @@ EOF
     chmod 700 "$PYTHON_ROOT/install-foamnordic.sh"
 }
 
+configure_python_entrypoints() {
+    # Tykky's bin launchers all source common.sh before entering the container.
+    # Preserve those launchers and attach the overlay at their shared entry point.
+    python3 - "$ENV_PREFIX" <<'PY'
+from pathlib import Path
+import sys
+
+prefix = Path(sys.argv[1]).resolve()
+common = prefix / "common.sh"
+launcher = prefix / "bin/python"
+if not common.is_file() or "common.sh" not in launcher.read_text():
+    raise SystemExit("Unsupported Tykky launcher layout; no files changed")
+begin = "# BEGIN CSC PYTHON OVERLAY\n"
+end = "# END CSC PYTHON OVERLAY\n"
+text = common.read_text()
+if begin in text:
+    if text.count(begin) != 1 or text.count(end) != 1:
+        raise SystemExit("Ambiguous overlay hook; no files changed")
+    start = text.index(begin)
+    stop = text.index(end, start) + len(end)
+    text = text[:start] + text[stop:]
+hook = r'''# BEGIN CSC PYTHON OVERLAY
+if [ "${CSC_PYTHON_BASE_ONLY:-0}" != 1 ]; then
+    _csc_env_prefix="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    export PYTHON_OVERLAY="$(dirname "$(dirname "$_csc_env_prefix")")/overlays/$(basename "$_csc_env_prefix")"
+    export PYTHONNOUSERSITE=1
+    case "${PYTHONPATH:-}" in
+        "$PYTHON_OVERLAY"|"$PYTHON_OVERLAY":*) ;;
+        *) export PYTHONPATH="$PYTHON_OVERLAY${PYTHONPATH:+:$PYTHONPATH}" ;;
+    esac
+    export SINGULARITYENV_PYTHONPATH="$PYTHONPATH"
+    export APPTAINERENV_PYTHONPATH="$PYTHONPATH"
+    export SINGULARITYENV_PYTHON_OVERLAY="$PYTHON_OVERLAY"
+    export APPTAINERENV_PYTHON_OVERLAY="$PYTHON_OVERLAY"
+    export SINGULARITYENV_PYTHONNOUSERSITE=1
+    export APPTAINERENV_PYTHONNOUSERSITE=1
+    unset _csc_env_prefix
+fi
+# END CSC PYTHON OVERLAY
+'''
+common.write_text(text.rstrip() + "\n\n" + hook)
+print(f"Configured direct Python launchers: {prefix / 'bin'}")
+PY
+}
+
+if [ "${1:-}" = "--repair-entrypoints" ]; then
+    [ "$#" -eq 2 ] || fail "Usage: $0 --repair-entrypoints <environment-prefix>"
+    ENV_PREFIX="$2"
+    configure_python_entrypoints
+    exit $?
+fi
+
 build_tykky_environment() {
     initialize_modules
     module --force purge
@@ -473,7 +525,8 @@ build_tykky_environment() {
         "$PYTHON_ROOT/environment.yml" \
         2> >(grep -v '^Unrecognised xattr prefix lustre\.lov$' >&2)
 
-    test -x "$ENV_PREFIX/bin/python"
+    test -x "$ENV_PREFIX/bin/python" || return 1
+    configure_python_entrypoints
 }
 
 prepare_openfoam() {
@@ -928,7 +981,7 @@ EOF
 validate_installation() {
     FOAMNORDIC_ENV_QUIET=1 source "$LOADER"
     # A fresh Tykky image must not contain a second FoamNordic installation.
-    env -u PYTHONPATH -u PYTHON_OVERLAY "$ENV_PREFIX/bin/python" -c '
+    env -u PYTHONPATH -u PYTHON_OVERLAY -u SINGULARITYENV_PYTHONPATH -u APPTAINERENV_PYTHONPATH CSC_PYTHON_BASE_ONLY=1 "$ENV_PREFIX/bin/python" -c '
 import importlib.util
 if importlib.util.find_spec("foamnordic") is not None:
     raise RuntimeError("FoamNordic is still present in the Tykky base; rebuild the environment")
@@ -939,6 +992,7 @@ if importlib.util.find_spec("foamnordic") is not None:
         return 0
     fi
     "$STATE_ROOT/python" "$STATE_ROOT/check-foamnordic.py" || return 1
+    env -u PYTHONPATH -u PYTHON_OVERLAY "$ENV_PREFIX/bin/python" "$STATE_ROOT/check-foamnordic.py" || return 1
     "$STATE_ROOT/python" -c 'from foamnordic._cli import main; raise SystemExit(main(["doctor"]))' || return 1
     git -C "$FOAMNORDIC_DIR" status --short --branch
 }

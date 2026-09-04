@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 import subprocess
 import unittest
+import tempfile
 
 SOURCE = Path(__file__).with_name("python-install.sh").read_text()
 
@@ -28,6 +29,26 @@ def render(target, arch="x86_64"):
 
 
 class InstallerTests(unittest.TestCase):
+    def test_direct_entrypoint_repair(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            prefix = Path(temporary) / 'x86_64/envs/example-3.12'
+            (prefix / 'bin').mkdir(parents=True)
+            common = prefix / 'common.sh'
+            common.write_text('#!/bin/bash\n# original Tykky content\n')
+            launcher = prefix / 'bin/python'
+            launcher.write_text('#!/bin/bash\nsource "$DIR/../common.sh"\n')
+            script = Path(__file__).with_name('python-install.sh')
+            for _ in range(2):
+                subprocess.run(['bash', str(script), '--repair-entrypoints', str(prefix)], check=True, capture_output=True)
+            self.assertEqual(common.read_text().count('# BEGIN CSC PYTHON OVERLAY'), 1)
+            self.assertIn('# original Tykky content', common.read_text())
+            env = dict(os.environ, PYTHONPATH='/old/path')
+            command = 'source "$1"; printf "%s\\n" "$PYTHON_OVERLAY" "$PYTHONPATH" "$PYTHONNOUSERSITE" "$SINGULARITYENV_PYTHONPATH"'
+            lines = subprocess.check_output(['bash', '-c', command, 'check', str(common)], env=env, text=True).splitlines()
+            overlay = str(Path(temporary) / 'x86_64/overlays/example-3.12')
+            self.assertEqual(lines, [overlay, overlay + ':/old/path', '1', overlay + ':/old/path'])
+            self.assertEqual(launcher.read_text(), '#!/bin/bash\nsource "$DIR/../common.sh"\n')
+
     def test_shell_templates(self):
         subprocess.run(["bash", "-n"], input=SOURCE, text=True, check=True)
         for arch in ("x86_64", "aarch64"):

@@ -131,8 +131,14 @@ The installer generates a common executable Python wrapper:
 ```
 
 In remote VS Code, use **Python: Select Interpreter → Enter interpreter path**
-and select this wrapper, not `envs/<nickname>-3.12/bin/python`. Use the same
-wrapper for terminal scripts and batch jobs:
+and select `envs/<nickname>-3.12/bin/python`. The installer now configures
+Tykky's shared `common.sh` entry point so direct `bin/python` and `bin/python3`
+launches select the architecture-specific overlay and disable user site-packages.
+The original Tykky launchers are preserved. This does not load OpenFOAM modules;
+activate them explicitly or use `Case.of_cmd` for case execution.
+
+The optional `state/python` wrapper additionally loads the OpenFOAM environment.
+It remains useful for terminal scripts and batch jobs:
 
 ```bash
 /scratch/<allocation-account>/<user>/Utilities/Python/x86_64/state/python your_script.py
@@ -265,11 +271,23 @@ Stop jobs and kernels using that environment before rebuilding it; the installer
 replaces the selected environment. Existing overlays and the source checkout
 are retained, and FoamNordic is reinstalled into the overlay.
 
-Then select the generated `state/python` wrapper in VS Code and the registered
-kernel in Jupyter. The loader retains a compatibility guard for old frozen
-editable hooks, but bypassing the loader/wrapper on an old environment can still
-mix new Python sources with an old `_native` library. `foamnordic clobber` alone
-does not reinstall that Python extension.
+For environments already rebuilt with the external overlay, no reinstall is
+needed to enable direct Python launchers. Run once for each installed prefix:
+
+```bash
+bash python-install.sh --repair-entrypoints /scratch/<allocation-account>/<user>/Utilities/Python/x86_64/envs/<nickname>-3.12
+```
+
+This changes only the marked overlay hook in that environment's `common.sh`.
+It does not rebuild Tykky, install packages, load modules, or delete user packages.
+The operation is idempotent and rejects an unrecognized launcher layout.
+Then terminate existing Python processes/kernels and select `bin/python` again.
+The registered Jupyter kernel and `state/python` also continue to work.
+
+Old packages under `~/.local` are excluded with `PYTHONNOUSERSITE=1`, not deleted:
+other environments may still need them. The loader retains a compatibility
+guard for frozen editable hooks in older images. `foamnordic clobber` alone
+does not reinstall the Python extension.
 
 Installation and FoamNordic updates check that both modules come from the overlay
 and that `LongshipRequest.use_model_host` exists, before running `doctor`.
