@@ -426,7 +426,10 @@ if [ -d "$FOAMNORDIC_DIR/.git" ]; then
     }
     git -C "$FOAMNORDIC_DIR" fetch origin "$FOAMNORDIC_BRANCH"
 else
-    rm -rf "$FOAMNORDIC_DIR"
+    [ ! -e "$FOAMNORDIC_DIR" ] || {
+        printf 'Refusing to replace a non-Git source directory: %s\n' "$FOAMNORDIC_DIR" >&2
+        exit 1
+    }
     git clone --branch "$FOAMNORDIC_BRANCH" --single-branch \
         "$FOAMNORDIC_REPO" "$FOAMNORDIC_DIR"
 fi
@@ -434,7 +437,16 @@ fi
 git -C "$FOAMNORDIC_DIR" switch "$FOAMNORDIC_BRANCH"
 git -C "$FOAMNORDIC_DIR" merge --ff-only "origin/$FOAMNORDIC_BRANCH"
 
-uv pip install --link-mode=copy --editable "$FOAMNORDIC_DIR/python"
+# Freeze dependencies, not FoamNordic or its editable import hook, in Tykky.
+python - "$FOAMNORDIC_DIR/python/pyproject.toml" "$STATE_ROOT/foamnordic-dependencies.txt" <<'PY'
+import sys
+import tomllib
+from pathlib import Path
+
+project = tomllib.loads(Path(sys.argv[1]).read_text())["project"]
+Path(sys.argv[2]).write_text("\n".join(project.get("dependencies", [])) + "\n")
+PY
+uv pip install --link-mode=copy --requirements "$STATE_ROOT/foamnordic-dependencies.txt"
 uv pip check
 python -m pip list --format=freeze | sort > "$STATE_ROOT/requirements.txt"
 EOF
@@ -595,6 +607,16 @@ build_foamnordic() {
     export CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS"
     export WM_NCOMPPROCS="$BUILD_JOBS"
 
+    export PYTHON_OVERLAY="$PYTHON_ROOT/$MACHINE_ARCH/overlays/$ENV_NICKNAME-3.12"
+    export PYTHONPATH="$PYTHON_OVERLAY${PYTHONPATH:+:$PYTHONPATH}"
+    export PYTHONNOUSERSITE=1
+    mkdir -p "$PYTHON_OVERLAY"
+    # Install Python sources and their matching extension together, outside Tykky.
+    PATH="$PATH:$ENV_PREFIX/bin" "$ENV_PREFIX/bin/uv" pip install \
+        --python "$ENV_PREFIX/bin/python" \
+        --target "$PYTHON_OVERLAY" --link-mode=copy --reinstall --no-deps \
+        "$FOAMNORDIC_DIR/python" || return 1
+
     # Tykky launchers activate their Conda toolchain inside the container. Keep
     # its Python packages, but restore the Roihu module PATH before FoamNordic
     # starts CMake and wmake so OpenFOAM is linked with its matching compiler.
@@ -678,11 +700,11 @@ if [ "${INSTALL_FOAMNORDIC:-1}" -eq 1 ]; then
     module --force purge
     case "$MACHINE_ARCH" in
         x86_64)
-            module load gcc/15.2.0 openmpi/5.0.10 openfoam/2512
+            module load gcc/15.2.0 openmpi/5.0.10 openfoam/2512 || return 1
             ;;
         aarch64)
             module use "$HOME/.local/share/modulefiles/foamnordic/aarch64"
-            module load openfoam/2512
+            module load openfoam/2512 || return 1
             ;;
         *)
             printf 'Unsupported Roihu architecture: %s\n' "$MACHINE_ARCH" >&2
@@ -719,6 +741,37 @@ fi
 unset identity_file
 EOF
     chmod 750 "$LOADER"
+
+    # One executable entry point for terminals, VS Code and Jupyter. Do not
+    # replace Tykky's own Python launcher (the wrapper delegates to it).
+    cat > "$STATE_ROOT/python" <<EOF
+#!/usr/bin/env bash
+set -eo pipefail
+if [ "\$(uname -m)" != "$MACHINE_ARCH" ]; then
+    printf 'Wrong architecture: select the Python wrapper for this node.\n' >&2
+    exit 1
+fi
+export FOAMNORDIC_ENV_QUIET=1
+source "$LOADER" || exit 1
+exec "\$ENV_PREFIX/bin/python" "\$@"
+EOF
+    chmod 750 "$STATE_ROOT/python"
+
+    cat > "$STATE_ROOT/check-foamnordic.py" <<'PY'
+import os
+from pathlib import Path
+import foamnordic
+from foamnordic import _native
+
+package = (Path(os.environ["PYTHON_OVERLAY"]) / "foamnordic").resolve()
+for module in (foamnordic, _native):
+    source = Path(module.__file__).resolve()
+    if not source.is_relative_to(package):
+        raise RuntimeError(f"Mixed FoamNordic installation: {source}; expected {package}")
+    print(source)
+if not hasattr(_native.LongshipRequest(), "use_model_host"):
+    raise RuntimeError("Outdated FoamNordic extension; run update-python foamnordic")
+PY
 
     cat > "$HOME/bin/update-python" <<EOF
 #!/usr/bin/env bash
@@ -808,11 +861,12 @@ from foamnordic._cli import main
 
 raise SystemExit(main(sys.argv[1:]))
 ' build --source "\$FOAMNORDIC_DIR"
-    foamnordic doctor
+    "\$PYTHON_ROOT/\$MACHINE_ARCH/state/python" "\$PYTHON_ROOT/\$MACHINE_ARCH/state/check-foamnordic.py"
+    "\$PYTHON_ROOT/\$MACHINE_ARCH/state/python" -c 'from foamnordic._cli import main; raise SystemExit(main(["doctor"]))'
     exit 0
     ;;
 foamnordic==*|foamnordic@*)
-    printf 'Error: use exactly "update-python foamnordic" for the editable checkout.\n' >&2
+    printf 'Error: use exactly "update-python foamnordic" for the source checkout.\n' >&2
     exit 2
     ;;
 esac
@@ -857,9 +911,7 @@ register_kernel() {
 
     cat > "$launcher" <<EOF
 #!/usr/bin/env bash
-export FOAMNORDIC_ENV_QUIET=1
-source "$LOADER" || exit 1
-exec "$ENV_PREFIX/bin/python" -m ipykernel_launcher "\$@"
+exec "$STATE_ROOT/python" -m ipykernel_launcher "\$@"
 EOF
     chmod 700 "$launcher"
     mkdir -p "$kernel_dir"
@@ -875,21 +927,19 @@ EOF
 
 validate_installation() {
     FOAMNORDIC_ENV_QUIET=1 source "$LOADER"
+    # A fresh Tykky image must not contain a second FoamNordic installation.
+    env -u PYTHONPATH -u PYTHON_OVERLAY "$ENV_PREFIX/bin/python" -c '
+import importlib.util
+if importlib.util.find_spec("foamnordic") is not None:
+    raise RuntimeError("FoamNordic is still present in the Tykky base; rebuild the environment")
+' || return 1
     if [ "$INSTALL_FOAMNORDIC" -eq 0 ]; then
         python --version
         python -m pip check
         return 0
     fi
-    python - <<'PY'
-from pathlib import Path
-import foamnordic
-
-source = Path(foamnordic.__file__).resolve()
-if "FoamNordic/python/foamnordic" not in str(source):
-    raise RuntimeError(f"FoamNordic is not loaded from the editable checkout: {source}")
-print(f"FoamNordic editable source: {source}")
-PY
-    foamnordic doctor
+    "$STATE_ROOT/python" "$STATE_ROOT/check-foamnordic.py" || return 1
+    "$STATE_ROOT/python" -c 'from foamnordic._cli import main; raise SystemExit(main(["doctor"]))' || return 1
     git -C "$FOAMNORDIC_DIR" status --short --branch
 }
 
@@ -903,8 +953,8 @@ main() {
     run_step 2 "Writing Tykky configuration" write_environment_files
     run_step 3 "Building the Tykky environment" build_tykky_environment
     run_step 4 "Preparing OpenFOAM v2512" prepare_openfoam
-    run_step 5 "Building FoamNordic for OpenFOAM v2512" build_foamnordic
-    run_step 6 "Writing the environment loader" write_loader
+    run_step 5 "Writing the environment loader" write_loader
+    run_step 6 "Installing and building FoamNordic outside Tykky" build_foamnordic
     run_step 7 "Registering the Jupyter kernel" register_kernel
     run_step 8 "Validating the installation" validate_installation
 

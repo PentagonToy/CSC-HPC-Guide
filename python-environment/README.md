@@ -38,6 +38,12 @@ Do not source the installer. Check its shell syntax with:
 ./python-install.sh --check
 ```
 
+Run the offline template regression tests without installing anything:
+
+```bash
+python3 test_installer.py
+```
+
 It asks for the CSC project, project directory name, environment nickname, and
 whether FoamNordic should be installed. FoamNordic is enabled by default.
 The resulting environment is stored at:
@@ -46,7 +52,9 @@ The resulting environment is stored at:
 /scratch/<allocation-account>/<user>/Utilities/Python/<architecture>/envs/<nickname>-3.12
 ```
 
-The editable checkout is shared by architecture-specific environments:
+The source checkout is shared by architecture-specific environments. FoamNordic
+itself is installed non-editably into each architecture's writable overlay;
+only its dependencies are installed inside Tykky:
 
 ```text
 /scratch/<allocation-account>/<user>/Source/FoamNordic
@@ -111,7 +119,34 @@ python -c "import foamnordic; print(foamnordic.__file__)"
 foamnordic doctor
 ```
 
-The package path must point into `Source/FoamNordic/python/foamnordic`.
+Both the package and `_native` paths must point into
+`Utilities/Python/<architecture>/overlays/<nickname>-3.12/foamnordic`.
+
+### VS Code, scripts, and Jupyter
+
+The installer generates a common executable Python wrapper:
+
+```text
+/scratch/<allocation-account>/<user>/Utilities/Python/<architecture>/state/python
+```
+
+In remote VS Code, use **Python: Select Interpreter → Enter interpreter path**
+and select this wrapper, not `envs/<nickname>-3.12/bin/python`. Use the same
+wrapper for terminal scripts and batch jobs:
+
+```bash
+/scratch/<allocation-account>/<user>/Utilities/Python/x86_64/state/python your_script.py
+```
+
+The registered Jupyter kernel delegates to this wrapper too. It loads the
+OpenFOAM modules and overlay before starting Python; no prior `source` is needed.
+Choose the `aarch64` wrapper on ARM nodes. The wrapper rejects the wrong node
+architecture. VS Code extensions that bypass the selected wrapper are not covered;
+use the explicit terminal command above in that case.
+
+After package updates, restart Python processes and notebook kernels. Running
+processes retain already imported modules. `sys.executable` may still report
+Tykky's underlying Python; verify package paths rather than that value alone.
 
 ## Update Python packages
 
@@ -137,7 +172,8 @@ List packages in the writable update layer:
 update-python --list
 ```
 
-Do not install FoamNordic into the overlay. It has a dedicated update path:
+Do not use the generic or editable updater for FoamNordic. It has a dedicated
+overlay installation/update path:
 
 ```bash
 update-python foamnordic
@@ -206,16 +242,37 @@ Utilities/
         ├── envs/<nickname>-3.12/
         ├── overlays/<nickname>-3.12/
         └── state/
+            ├── python                 # shared executable entry point
+            ├── check-foamnordic.py
+            ├── foamnordic-dependencies.txt
             ├── jupyter-kernel.sh
             └── requirements.txt
 ```
 
-Installation rebuilds the selected Tykky environment. The editable checkout
+Installation rebuilds the selected Tykky environment. The source checkout
 remains separate and is reused only when it is clean.
 Package and build caches are kept under the architecture-specific scratch
 tree instead of the quota-limited home directory.
 
 ## Troubleshooting
+
+### Migrating an older editable Tykky installation
+
+Updating this repository alone does not change an installed environment.
+Rerun the installer yourself on each architecture you use to remove the old
+FoamNordic package/editable hook from that architecture's rebuilt Tykky image.
+Stop jobs and kernels using that environment before rebuilding it; the installer
+replaces the selected environment. Existing overlays and the source checkout
+are retained, and FoamNordic is reinstalled into the overlay.
+
+Then select the generated `state/python` wrapper in VS Code and the registered
+kernel in Jupyter. The loader retains a compatibility guard for old frozen
+editable hooks, but bypassing the loader/wrapper on an old environment can still
+mix new Python sources with an old `_native` library. `foamnordic clobber` alone
+does not reinstall that Python extension.
+
+Installation and FoamNordic updates check that both modules come from the overlay
+and that `LongshipRequest.use_model_host` exists, before running `doctor`.
 
 If `wmake` is unavailable on x86_64:
 
