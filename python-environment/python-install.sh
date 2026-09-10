@@ -387,6 +387,9 @@ tabulate
 tqdm
 twine
 typing-extensions
+
+# Others
+gdown
 EOF
 
     if [ "$MACHINE_ARCH" = "x86_64" ]; then
