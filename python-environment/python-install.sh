@@ -363,6 +363,7 @@ trame-vuetify
 vtk
 
 # Configuration, profiling, and development
+cmake>=3.20
 hydra-core
 jinja2
 loguru
