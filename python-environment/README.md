@@ -1,317 +1,96 @@
 # FoamNordic Python environment on CSC Roihu
 
-This installer creates a Python 3.12 environment for FoamNordic with CSC
-Tykky. It follows the `dev` branch and keeps its source in a shared checkout.
-Both Roihu CPU (`x86_64`) and GPU (`aarch64`) login environments are supported.
-
-## Included
-
-- A Tykky-managed Python 3.12 environment
-- Scientific Python, JAX, scikit-learn, ONNX, Cantera, and visualisation tools
-- `pyvista`, `vtk`, and `trame` for interactive visualisation
-- An optional source checkout of
-  `https://github.com/PentagonToy/FoamNordic.git` on `dev`
-- FoamNordic native components built against `openfoam/2512`
-- An ARM64 OpenFOAM v2512 runtime and user module on Roihu GPU
-- A Jupyter kernel and reusable environment loader
-- `update-python` for lightweight package updates without rebuilding Tykky
-- A lightweight installation spinner with per-step elapsed time
-- Per-step logs under `Utilities/Python/logs/install-<timestamp>`
-
-The environment intentionally excludes PyFoam, the standalone `hdbscan`
-package, PyTorch, TensorFlow, tf2onnx, ipyvtklink, Julia, and PySR. FoamNordic
-is independent of SmartSim, SmartRedis, Redis, and RedisAI; none of those
-components are installed.
+`python-install.sh` creates an architecture-specific Python 3.12 environment under project scratch using `uv`. It installs the shared scientific Python requirements, including `gdown`, and can install and build FoamNordic without placing it inside a container.
 
 ## Install
 
-Run the installer with Bash on Roihu:
+Run the installer from a Roihu login or compute node:
 
 ```bash
-chmod +x python-install.sh
-./python-install.sh
+bash python-install.sh
 ```
 
-Do not source the installer. Check its shell syntax with:
+The installer asks for the CSC project, project directory name, environment nickname and whether FoamNordic should be installed. The saved identity in `$HOME/.config/csc-hpc/identity.sh` supplies defaults when available.
+
+For an unattended installation:
 
 ```bash
-./python-install.sh --check
-```
-
-Run the offline template regression tests without installing anything:
-
-```bash
-python3 test_installer.py
-```
-
-It asks for the CSC project, project directory name, environment nickname, and
-whether FoamNordic should be installed. FoamNordic is enabled by default.
-The resulting environment is stored at:
-
-```text
-/scratch/<allocation-account>/<user>/Utilities/Python/<architecture>/envs/<nickname>-3.12
-```
-
-The source checkout is shared by architecture-specific environments. FoamNordic
-itself is installed non-editably into each architecture's writable overlay;
-only its dependencies are installed inside Tykky:
-
-```text
-/scratch/<allocation-account>/<user>/Source/FoamNordic
-```
-
-The default build parallelism is four jobs. Inside a Slurm allocation,
-`SLURM_CPUS_PER_TASK` is used automatically. To override it:
-
-```bash
-FOAMNORDIC_BUILD_JOBS=8 ./python-install.sh
-```
-
-For unattended installation:
-
-```bash
-CSC_PROJECT="<allocation-account>" \
-PROJECT_USER_DIR="<user>" \
-ENV_NICKNAME="foamnordic" \
+CSC_PROJECT=project_2015384 \
+PROJECT_USER_DIR=Hanseul \
+ENV_NICKNAME=PentagonToy \
+FOAMNORDIC_INSTALL_PACKAGE=yes \
 FOAMNORDIC_INSTALL_ASSUME_YES=1 \
-./python-install.sh
+bash python-install.sh
 ```
 
-Set `FOAMNORDIC_INSTALL_PACKAGE=no` to create the Python environment without
-installing or building FoamNordic.
+The installer downloads a standalone `uv` executable for the current architecture, lets `uv` provision Python 3.12, creates the virtual environment and installs its packages. Re-running it replaces only the selected architecture and nickname environment. Download caches and source checkouts remain available for reuse.
 
-The installer selects architecture-specific software automatically:
+## FoamNordic source and PyPI fallback
 
-| Login environment | Architecture | Compiler | OpenFOAM provider |
+When FoamNordic installation is selected, the installer first tries the private `PentagonToy/FoamNordic` repository. An existing clean checkout is updated; otherwise the repository is cloned when the user has access. The monorepo package at `packages/foamnordic` is installed normally into the virtual environment and its native runtime is built from that checkout.
+
+If the private repository cannot be accessed, installation falls back to PyPI. The x86_64 environment uses `foamnordic[ml]`, while the aarch64 environment uses `foamnordic[ml-cuda12]`. The fallback wheel's bundled source is used by `foamnordic build`.
+
+## Use
+
+The installer writes an environment loader under the project source directory:
+
+```bash
+source /scratch/project_2015384/Hanseul/Utilities/Python4FoamNordic.sh
+```
+
+The loader selects the environment matching `uname -m`, activates its Python executable and loads the matching OpenFOAM environment. It also defines these helpers:
+
+```bash
+Python
+update-python numpy
+update-python foamnordic
+```
+
+`Python` starts the selected interpreter. `update-python <package>` updates an ordinary package directly in the virtual environment. `update-python foamnordic` updates from the private source checkout when it is available and otherwise installs the current PyPI release, then rebuilds and checks FoamNordic. An editable local package can be installed with `update-python -e /absolute/path/to/package`.
+
+The installer also creates a Jupyter kernel for the selected environment. VS Code and other editors should use the Python executable reported at the end of installation rather than a user-local or system interpreter.
+
+## Architecture layout
+
+| Architecture | Python environment | OpenFOAM | FoamNordic extra |
 | --- | --- | --- | --- |
-| Roihu CPU | `x86_64` | GCC 15.2.0 | CSC `openfoam/2512` module |
-| Roihu GPU | `aarch64` | GCC 14.3.0 | CSC-HPC-Guide ARM64 release asset |
+| `x86_64` | `Utilities/Python/x86_64/envs/<nickname>-3.12` | CSC `openfoam/2512` module | `ml` |
+| `aarch64` | `Utilities/Python/aarch64/envs/<nickname>-3.12` | Roihu ARM64 runtime asset | `ml-cuda12` |
 
-`scikit-learn-intelex` is installed only on `x86_64`. It is omitted on ARM64
-because its native runtime is not available for that architecture.
+The shared layout is:
 
-## Load
-
-After installation:
-
-```bash
-source "/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Utilities/Python4FoamNordic.sh"
+```text
+/scratch/<project>/<directory>/
+├── Source/
+│   ├── FoamNordic/
+│   └── CSC-HPC-Guide/
+└── Utilities/
+    ├── Python4FoamNordic.sh
+    ├── OpenFOAM/aarch64/
+    └── Python/
+        ├── x86_64/
+        │   ├── envs/<nickname>-3.12/
+        │   ├── python/
+        │   └── tools/uv
+        └── aarch64/
+            ├── envs/<nickname>-3.12/
+            ├── python/
+            └── tools/uv
 ```
 
-The loader activates the Tykky environment and loads the matching compiler,
-`openmpi/5.0.10`, and `openfoam/2512`. On ARM64, the installer creates a
-private module tree and adds it only on ARM nodes, so the same module name does
-not shadow CSC's x86_64 module. The loader can be sourced from login nodes,
-interactive allocations, and Slurm jobs.
+The `update-python` command is installed in `$HOME/bin`.
 
-For a manual ARM64 OpenFOAM-only shell:
+The x86_64 and aarch64 environments are intentionally separate because their Python packages and native libraries are not binary-compatible. The same loader and update command safely select the matching side at runtime.
 
-```bash
-module use "$HOME/.local/share/modulefiles/foamnordic/aarch64"
-module load openfoam/2512
-```
+## Verification
 
-Confirm the active installation with:
+After loading the environment:
 
 ```bash
-which python
-python -c "import foamnordic; print(foamnordic.__file__)"
+python -c 'import sys; print(sys.executable)'
+python -c 'import foamnordic; print(foamnordic.__file__)'
 foamnordic doctor
 ```
 
-Both the package and `_native` paths must point into
-`Utilities/Python/<architecture>/overlays/<nickname>-3.12/foamnordic`.
-
-### VS Code, scripts, and Jupyter
-
-The installer generates a common executable Python wrapper:
-
-```text
-/scratch/<allocation-account>/<user>/Utilities/Python/<architecture>/state/python
-```
-
-In remote VS Code, use **Python: Select Interpreter → Enter interpreter path**
-and select `envs/<nickname>-3.12/bin/python`. The installer now configures
-Tykky's shared `common.sh` entry point so direct `bin/python` and `bin/python3`
-launches select the architecture-specific overlay and disable user site-packages.
-The original Tykky launchers are preserved. This does not load OpenFOAM modules;
-activate them explicitly or use `Case.of_cmd` for case execution.
-
-The optional `state/python` wrapper additionally loads the OpenFOAM environment.
-It remains useful for terminal scripts and batch jobs:
-
-```bash
-/scratch/<allocation-account>/<user>/Utilities/Python/x86_64/state/python your_script.py
-```
-
-The registered Jupyter kernel delegates to this wrapper too. It loads the
-OpenFOAM modules and overlay before starting Python; no prior `source` is needed.
-Choose the `aarch64` wrapper on ARM nodes. The wrapper rejects the wrong node
-architecture. VS Code extensions that bypass the selected wrapper are not covered;
-use the explicit terminal command above in that case.
-
-After package updates, restart Python processes and notebook kernels. Running
-processes retain already imported modules. `sys.executable` may still report
-Tykky's underlying Python; verify package paths rather than that value alone.
-
-## Update Python packages
-
-Update or add ordinary packages without rebuilding the Tykky environment:
-
-```bash
-update-python scikit-learn
-update-python "numpy<3" pandas
-```
-
-These are regular installations in the writable overlay. They are editable
-only when `--editable` is explicitly used.
-
-Install a local project in editable mode with:
-
-```bash
-update-python --editable /scratch/<allocation-account>/<user>/Source/MyProject
-```
-
-List packages in the writable update layer:
-
-```bash
-update-python --list
-```
-
-Do not use the generic or editable updater for FoamNordic. It has a dedicated
-overlay installation/update path:
-
-```bash
-update-python foamnordic
-```
-
-This fast-forwards the `FoamNordic/dev` checkout, rebuilds its Python package
-and native extension in the architecture-specific writable overlay, rebuilds
-the persistent runtime using the Roihu OpenFOAM toolchain, and runs
-`foamnordic doctor`. Rebuilding both components prevents new Python code from
-loading a native extension frozen in the original Tykky image.
-
-For ordinary packages, the command uses `uv` and writes
-architecture-specific overrides to:
-
-```text
-/scratch/<allocation-account>/<user>/Utilities/Python/<architecture>/overlays/<nickname>-3.12
-```
-
-The loader puts this directory before the immutable Tykky environment on
-`PYTHONPATH`. Update FoamNordic with its dedicated updater so its Python and
-native components remain synchronized. If FoamNordic changes its declared
-dependencies, rerun the full installer.
-
-## Update
-
-The legacy repository update helper is retained for existing x86_64 installs:
-
-```bash
-bash /scratch/<allocation-account>/<user>/Source/update-foamnordic-ref.sh
-```
-
-It fast-forwards `CSC-HPC-Guide/main`, installs the canonical installer,
-fast-forwards `FoamNordic/dev`, rebuilds the Python extension and native
-runtime against `openfoam/2512`, and runs `foamnordic doctor` without rebuilding
-the Tykky environment.
-
-The updater stops if either repository contains uncommitted changes. It does
-not rewrite commits or discard local work.
-
-Rerun the full installer when FoamNordic adds or changes Python dependencies;
-ordinary source updates only require the lightweight updater.
-
-## Native rebuild
-
-```bash
-update-python foamnordic
-```
-
-This route keeps Tykky's Python packages while excluding its Conda compiler
-and linker from the native OpenFOAM build. OpenFOAM is fixed to v2512 so the
-environment, runtime, and adapter use one explicit ABI.
-
-## Generated layout
-
-```text
-Utilities/
-├── OpenFOAM/aarch64/openfoam-v2512-linux-arm64/  # ARM64 only
-├── Python4FoamNordic.sh
-└── Python/
-    ├── environment.yml
-    ├── requirements.in
-    ├── install-foamnordic.sh
-    └── <architecture>/
-        ├── build/
-        ├── cache/
-        ├── envs/<nickname>-3.12/
-        ├── overlays/<nickname>-3.12/
-        └── state/
-            ├── python                 # shared executable entry point
-            ├── check-foamnordic.py
-            ├── foamnordic-dependencies.txt
-            ├── jupyter-kernel.sh
-            └── requirements.txt
-```
-
-Installation rebuilds the selected Tykky environment. The source checkout
-remains separate and is reused only when it is clean.
-Package and build caches are kept under the architecture-specific scratch
-tree instead of the quota-limited home directory.
-
-## Troubleshooting
-
-### Migrating an older editable Tykky installation
-
-Updating this repository alone does not change an installed environment.
-Rerun the installer yourself on each architecture you use to remove the old
-FoamNordic package/editable hook from that architecture's rebuilt Tykky image.
-Stop jobs and kernels using that environment before rebuilding it; the installer
-replaces the selected environment. Existing overlays and the source checkout
-are retained, and FoamNordic is reinstalled into the overlay.
-
-For environments already rebuilt with the external overlay, no reinstall is
-needed to enable direct Python launchers. Run once for each installed prefix:
-
-```bash
-bash python-install.sh --repair-entrypoints /scratch/<allocation-account>/<user>/Utilities/Python/x86_64/envs/<nickname>-3.12
-```
-
-This changes only the marked overlay hook in that environment's `common.sh`.
-It does not rebuild Tykky, install packages, load modules, or delete user packages.
-The operation is idempotent and rejects an unrecognized launcher layout.
-Then terminate existing Python processes/kernels and select `bin/python` again.
-The registered Jupyter kernel and `state/python` also continue to work.
-
-Old packages under `~/.local` are excluded with `PYTHONNOUSERSITE=1`, not deleted:
-other environments may still need them. The loader retains a compatibility
-guard for frozen editable hooks in older images. `foamnordic clobber` alone
-does not reinstall the Python extension.
-
-Installation and FoamNordic updates check that both modules come from the overlay
-and that `LongshipRequest.use_model_host` exists, before running `doctor`.
-
-If `wmake` is unavailable on x86_64:
-
-```bash
-module --force purge
-module load gcc/15.2.0 openmpi/5.0.10 openfoam/2512
-echo "$WM_PROJECT_VERSION"
-which wmake
-```
-
-On ARM64:
-
-```bash
-module use "$HOME/.local/share/modulefiles/foamnordic/aarch64"
-module load openfoam/2512
-echo "$WM_PROJECT_VERSION"
-which wmake
-```
-
-If updating reports local changes, inspect them before continuing:
-
-```bash
-git -C "/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Source/FoamNordic" status
-```
+The reported Python and package paths should both belong to the selected scratch environment. Installation logs are written below `Utilities/Python/logs/`.

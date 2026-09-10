@@ -292,20 +292,6 @@ EOF
 }
 
 write_environment_files() {
-    cat > "$PYTHON_ROOT/environment.yml" <<'EOF'
-channels:
-  - conda-forge
-  - nodefaults
-dependencies:
-  - python=3.12
-  - pip
-  - git
-  - compilers
-  - cmake
-  - make
-  - ninja
-EOF
-
     cat > "$PYTHON_ROOT/requirements.in" <<'EOF'
 # Scientific computing and data
 bottleneck
@@ -323,9 +309,12 @@ zarr
 
 # Machine learning used with FoamNordic
 catboost
+cloudpickle
 feature-engine
+joblib
 lightgbm
 mlflow
+onnx
 optuna
 scikit-learn
 shap
@@ -395,141 +384,61 @@ EOF
     if [ "$MACHINE_ARCH" = "x86_64" ]; then
         printf '\n# Intel acceleration (x86_64 only)\nscikit-learn-intelex\n' \
             >> "$PYTHON_ROOT/requirements.in"
+    else
+        printf '\n# CUDA runtime for Roihu GPU nodes\njax[cuda12]\n' \
+            >> "$PYTHON_ROOT/requirements.in"
     fi
 
-    cat > "$PYTHON_ROOT/install-foamnordic.sh" <<'EOF'
-#!/usr/bin/env bash
-set -Eeuo pipefail
-
-: "${FOAMNORDIC_DIR:?}"
-: "${FOAMNORDIC_REPO:?}"
-: "${FOAMNORDIC_BRANCH:?}"
-: "${PYTHON_ROOT:?}"
-: "${CACHE_ROOT:?}"
-: "${STATE_ROOT:?}"
-
-export UV_CACHE_DIR="$CACHE_ROOT/uv"
-export PIP_CACHE_DIR="$CACHE_ROOT/pip"
-export XDG_CACHE_HOME="$CACHE_ROOT/xdg"
-mkdir -p "$UV_CACHE_DIR" "$PIP_CACHE_DIR" "$XDG_CACHE_HOME"
-
-python -m pip install --disable-pip-version-check --progress-bar off uv
-uv pip install --link-mode=copy --requirements "$PYTHON_ROOT/requirements.in"
-
-if [ "${INSTALL_FOAMNORDIC:-1}" -eq 0 ]; then
-    uv pip check
-    python -m pip list --format=freeze | sort > "$STATE_ROOT/requirements.txt"
-    exit 0
-fi
-
-if [ -d "$FOAMNORDIC_DIR/.git" ]; then
-    [ -z "$(git -C "$FOAMNORDIC_DIR" status --porcelain)" ] || {
-        printf 'FoamNordic checkout has local changes: %s\n' "$FOAMNORDIC_DIR" >&2
-        exit 1
-    }
-    git -C "$FOAMNORDIC_DIR" fetch origin "$FOAMNORDIC_BRANCH"
-else
-    [ ! -e "$FOAMNORDIC_DIR" ] || {
-        printf 'Refusing to replace a non-Git source directory: %s\n' "$FOAMNORDIC_DIR" >&2
-        exit 1
-    }
-    git clone --branch "$FOAMNORDIC_BRANCH" --single-branch \
-        "$FOAMNORDIC_REPO" "$FOAMNORDIC_DIR"
-fi
-
-git -C "$FOAMNORDIC_DIR" switch "$FOAMNORDIC_BRANCH"
-git -C "$FOAMNORDIC_DIR" merge --ff-only "origin/$FOAMNORDIC_BRANCH"
-
-# Freeze dependencies, not FoamNordic or its editable import hook, in Tykky.
-python - "$FOAMNORDIC_DIR/python/pyproject.toml" "$STATE_ROOT/foamnordic-dependencies.txt" <<'PY'
-import sys
-import tomllib
-from pathlib import Path
-
-project = tomllib.loads(Path(sys.argv[1]).read_text())["project"]
-Path(sys.argv[2]).write_text("\n".join(project.get("dependencies", [])) + "\n")
-PY
-uv pip install --link-mode=copy --requirements "$STATE_ROOT/foamnordic-dependencies.txt"
-uv pip check
-python -m pip list --format=freeze | sort > "$STATE_ROOT/requirements.txt"
-EOF
-    chmod 700 "$PYTHON_ROOT/install-foamnordic.sh"
 }
 
-configure_python_entrypoints() {
-    # Tykky's bin launchers all source common.sh before entering the container.
-    # Preserve those launchers and attach the overlay at their shared entry point.
-    python3 - "$ENV_PREFIX" <<'PY'
-from pathlib import Path
-import sys
+install_uv() {
+    local tools="$PYTHON_ROOT/$MACHINE_ARCH/tools"
+    local executable="$tools/uv"
+    local downloaded
+    local target
+    local staging
 
-prefix = Path(sys.argv[1]).resolve()
-common = prefix / "common.sh"
-launcher = prefix / "bin/python"
-if not common.is_file() or "common.sh" not in launcher.read_text():
-    raise SystemExit("Unsupported Tykky launcher layout; no files changed")
-begin = "# BEGIN CSC PYTHON OVERLAY\n"
-end = "# END CSC PYTHON OVERLAY\n"
-text = common.read_text()
-if begin in text:
-    if text.count(begin) != 1 or text.count(end) != 1:
-        raise SystemExit("Ambiguous overlay hook; no files changed")
-    start = text.index(begin)
-    stop = text.index(end, start) + len(end)
-    text = text[:start] + text[stop:]
-hook = r'''# BEGIN CSC PYTHON OVERLAY
-if [ "${CSC_PYTHON_BASE_ONLY:-0}" != 1 ]; then
-    _csc_env_prefix="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    export PYTHON_OVERLAY="$(dirname "$(dirname "$_csc_env_prefix")")/overlays/$(basename "$_csc_env_prefix")"
-    export PYTHONNOUSERSITE=1
-    case "${PYTHONPATH:-}" in
-        "$PYTHON_OVERLAY"|"$PYTHON_OVERLAY":*) ;;
-        *) export PYTHONPATH="$PYTHON_OVERLAY${PYTHONPATH:+:$PYTHONPATH}" ;;
+    if [ -x "$executable" ]; then
+        "$executable" --version
+        return 0
+    fi
+
+    case "$MACHINE_ARCH" in
+        x86_64) target="x86_64-unknown-linux-gnu" ;;
+        aarch64) target="aarch64-unknown-linux-gnu" ;;
     esac
-    export SINGULARITYENV_PYTHONPATH="$PYTHONPATH"
-    export APPTAINERENV_PYTHONPATH="$PYTHONPATH"
-    export SINGULARITYENV_PYTHON_OVERLAY="$PYTHON_OVERLAY"
-    export APPTAINERENV_PYTHON_OVERLAY="$PYTHON_OVERLAY"
-    export SINGULARITYENV_PYTHONNOUSERSITE=1
-    export APPTAINERENV_PYTHONNOUSERSITE=1
-    unset _csc_env_prefix
-fi
-# END CSC PYTHON OVERLAY
-'''
-common.write_text(text.rstrip() + "\n\n" + hook)
-print(f"Configured direct Python launchers: {prefix / 'bin'}")
-PY
+    require_command curl
+    mkdir -p "$tools"
+    staging="$(mktemp -d "$BUILD_ROOT/uv.XXXXXX")"
+    curl --fail --location --retry 3 \
+        "https://github.com/astral-sh/uv/releases/latest/download/uv-$target.tar.gz" \
+        | tar -xz --directory "$staging"
+    downloaded="$(find "$staging" -type f -name uv -print -quit)"
+    [ -n "$downloaded" ] || fail "The uv archive did not contain an executable."
+    install -m 755 "$downloaded" "$executable"
+    find "$staging" -mindepth 1 -delete
+    rmdir "$staging"
+    "$executable" --version
 }
 
-if [ "${1:-}" = "--repair-entrypoints" ]; then
-    [ "$#" -eq 2 ] || fail "Usage: $0 --repair-entrypoints <environment-prefix>"
-    ENV_PREFIX="$2"
-    configure_python_entrypoints
-    exit $?
-fi
+build_uv_environment() {
+    local uv="$PYTHON_ROOT/$MACHINE_ARCH/tools/uv"
 
-build_tykky_environment() {
-    initialize_modules
-    module --force purge
-    module load tykky
-    require_command conda-containerize
+    export UV_CACHE_DIR="$CACHE_ROOT/uv"
+    export UV_PYTHON_INSTALL_DIR="$PYTHON_ROOT/$MACHINE_ARCH/python"
+    export XDG_CACHE_HOME="$CACHE_ROOT/xdg"
+    mkdir -p "$UV_CACHE_DIR" "$UV_PYTHON_INSTALL_DIR" "$XDG_CACHE_HOME"
 
-    rm -rf "$ENV_PREFIX" "$BUILD_ROOT"
-    mkdir -p "$BUILD_ROOT"
-
-    export CW_BUILD_TMPDIR="$BUILD_ROOT"
-    export TMPDIR="$BUILD_ROOT"
-    export FOAMNORDIC_REPO FOAMNORDIC_BRANCH FOAMNORDIC_DIR INSTALL_FOAMNORDIC
-    export PYTHON_ROOT CACHE_ROOT STATE_ROOT
-
-    conda-containerize new \
-        --prefix "$ENV_PREFIX" \
-        --post-install "$PYTHON_ROOT/install-foamnordic.sh" \
-        "$PYTHON_ROOT/environment.yml" \
-        2> >(grep -v '^Unrecognised xattr prefix lustre\.lov$' >&2)
-
-    test -x "$ENV_PREFIX/bin/python" || return 1
-    configure_python_entrypoints
+    if [ -e "$ENV_PREFIX" ]; then
+        find "$ENV_PREFIX" -mindepth 1 -delete
+        rmdir "$ENV_PREFIX"
+    fi
+    "$uv" venv --python "$PYTHON_VERSION" "$ENV_PREFIX"
+    "$uv" pip install --python "$ENV_PREFIX/bin/python" \
+        --requirements "$PYTHON_ROOT/requirements.in"
+    "$uv" pip check --python "$ENV_PREFIX/bin/python"
+    "$uv" pip freeze --python "$ENV_PREFIX/bin/python" \
+        | sort > "$STATE_ROOT/requirements.txt"
 }
 
 prepare_openfoam() {
@@ -646,6 +555,42 @@ EOF
 build_foamnordic() {
     [ "$INSTALL_FOAMNORDIC" -eq 1 ] || return 0
 
+    local uv="$PYTHON_ROOT/$MACHINE_ARCH/tools/uv"
+    local package_source
+    local install_origin
+    local -a build_arguments=()
+
+    if [ -d "$FOAMNORDIC_DIR/.git" ]; then
+        [ -z "$(git -C "$FOAMNORDIC_DIR" status --porcelain)" ] || \
+            fail "FoamNordic checkout has local changes: $FOAMNORDIC_DIR"
+        if GIT_TERMINAL_PROMPT=0 git -C "$FOAMNORDIC_DIR" fetch origin "$FOAMNORDIC_BRANCH"; then
+            git -C "$FOAMNORDIC_DIR" switch "$FOAMNORDIC_BRANCH"
+            git -C "$FOAMNORDIC_DIR" merge --ff-only "origin/$FOAMNORDIC_BRANCH"
+            package_source="$FOAMNORDIC_DIR/packages/foamnordic"
+            install_origin="source $FOAMNORDIC_BRANCH"
+            build_arguments=(--source "$FOAMNORDIC_DIR")
+        fi
+    elif [ -e "$FOAMNORDIC_DIR" ]; then
+        fail "Refusing to replace a non-Git source directory: $FOAMNORDIC_DIR"
+    elif GIT_TERMINAL_PROMPT=0 git ls-remote --exit-code \
+        --heads "$FOAMNORDIC_REPO" "$FOAMNORDIC_BRANCH" >/dev/null 2>&1; then
+        git clone --branch "$FOAMNORDIC_BRANCH" --single-branch \
+            "$FOAMNORDIC_REPO" "$FOAMNORDIC_DIR"
+        package_source="$FOAMNORDIC_DIR/packages/foamnordic"
+        install_origin="source $FOAMNORDIC_BRANCH"
+        build_arguments=(--source "$FOAMNORDIC_DIR")
+    fi
+
+    if [ -z "${package_source:-}" ]; then
+        if [ "$MACHINE_ARCH" = "aarch64" ]; then
+            package_source='foamnordic[ml-cuda12]'
+        else
+            package_source='foamnordic[ml]'
+        fi
+        install_origin="PyPI $package_source"
+        printf 'Private FoamNordic source unavailable; using %s.\n' "$package_source"
+    fi
+
     initialize_modules
     module --force purge
     if [ -n "$OPENFOAM_MODULE_ROOT" ]; then
@@ -663,54 +608,23 @@ build_foamnordic() {
     export CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS"
     export WM_NCOMPPROCS="$BUILD_JOBS"
 
-    export PYTHON_OVERLAY="$PYTHON_ROOT/$MACHINE_ARCH/overlays/$ENV_NICKNAME-3.12"
-    export PYTHONPATH="$PYTHON_OVERLAY${PYTHONPATH:+:$PYTHONPATH}"
     export PYTHONNOUSERSITE=1
-    mkdir -p "$PYTHON_OVERLAY"
-    # Install Python sources and their matching extension together, outside Tykky.
-    PATH="$PATH:$ENV_PREFIX/bin" "$ENV_PREFIX/bin/uv" pip install \
+    "$uv" pip install \
         --python "$ENV_PREFIX/bin/python" \
-        --target "$PYTHON_OVERLAY" --link-mode=copy --reinstall --no-deps \
-        "$FOAMNORDIC_DIR/python" || return 1
+        --reinstall --no-deps \
+        "$package_source" || return 1
+    printf '%s\n' "$install_origin" > "$STATE_ROOT/foamnordic-origin.txt"
 
-    # Tykky launchers activate their Conda toolchain inside the container. Keep
-    # its Python packages, but restore the Roihu module PATH before FoamNordic
-    # starts CMake and wmake so OpenFOAM is linked with its matching compiler.
-    FOAMNORDIC_NATIVE_PATH="$PATH" "$ENV_PREFIX/bin/python" -c '
-import os
+    "$ENV_PREFIX/bin/python" -c '
 import sys
 
-os.environ["PATH"] = os.environ.pop("FOAMNORDIC_NATIVE_PATH")
 from foamnordic._cli import main
 
 raise SystemExit(main(sys.argv[1:]))
-' build --source "$FOAMNORDIC_DIR"
+' build "${build_arguments[@]}"
 }
 
 write_loader() {
-    local python_overlay="$PYTHON_ROOT/$MACHINE_ARCH/overlays/$ENV_NICKNAME-3.12"
-    mkdir -p "$python_overlay"
-    cat > "$python_overlay/sitecustomize.py" <<'PY'
-"""Let a rebuilt FoamNordic overlay supersede Tykky's frozen editable wheel."""
-
-from __future__ import annotations
-
-import os
-from pathlib import Path
-import sys
-
-
-overlay = os.environ.get("PYTHON_OVERLAY")
-if overlay:
-    package = Path(overlay) / "foamnordic"
-    if (package / "__init__.py").is_file() and any(package.glob("_native*.so")):
-        sys.meta_path[:] = [
-            finder
-            for finder in sys.meta_path
-            if not finder.__class__.__module__.startswith("_editable_skbc_foamnordic")
-        ]
-PY
-
     cat > "$LOADER" <<'EOF'
 #!/usr/bin/env bash
 
@@ -732,8 +646,9 @@ export PYTHON_ROOT="$BASE_SCRATCH/Python"
 export MACHINE_ARCH="$(uname -m)"
 export ENV_PREFIX="$PYTHON_ROOT/$MACHINE_ARCH/envs/$ENV_NICKNAME-3.12"
 export FOAMNORDIC_DIR="/scratch/$CSC_PROJECT/$PROJECT_USER_DIR/Source/FoamNordic"
-export PYTHON_OVERLAY="$PYTHON_ROOT/$MACHINE_ARCH/overlays/$ENV_NICKNAME-3.12"
+export UV="$PYTHON_ROOT/$MACHINE_ARCH/tools/uv"
 export PYTHONNOUSERSITE=1
+unset PYTHONPATH
 
 [ -x "$ENV_PREFIX/bin/python" ] || {
     printf 'FoamNordic Python environment not found: %s\n' "$ENV_PREFIX" >&2
@@ -777,15 +692,6 @@ case ":${PATH:-}:" in
     *":$ENV_PREFIX/bin:"*) ;;
     *) export PATH="$ENV_PREFIX/bin${PATH:+:$PATH}" ;;
 esac
-case ":${PATH:-}:" in
-    *":$PYTHON_OVERLAY/bin:"*) ;;
-    *) export PATH="$PYTHON_OVERLAY/bin${PATH:+:$PATH}" ;;
-esac
-case ":${PYTHONPATH:-}:" in
-    *":$PYTHON_OVERLAY:"*) ;;
-    *) export PYTHONPATH="$PYTHON_OVERLAY${PYTHONPATH:+:$PYTHONPATH}" ;;
-esac
-
 if [ "${FOAMNORDIC_ENV_QUIET:-0}" != "1" ]; then
     printf 'Python environment loaded: %s (%s)' "$ENV_NICKNAME" "$MACHINE_ARCH"
     if [ "${INSTALL_FOAMNORDIC:-1}" -eq 1 ]; then
@@ -798,8 +704,7 @@ unset identity_file
 EOF
     chmod 750 "$LOADER"
 
-    # One executable entry point for terminals, VS Code and Jupyter. Do not
-    # replace Tykky's own Python launcher (the wrapper delegates to it).
+    # One executable entry point for terminals, VS Code and Jupyter.
     cat > "$STATE_ROOT/python" <<EOF
 #!/usr/bin/env bash
 set -eo pipefail
@@ -819,7 +724,7 @@ from pathlib import Path
 import foamnordic
 from foamnordic import _native
 
-package = (Path(os.environ["PYTHON_OVERLAY"]) / "foamnordic").resolve()
+package = (Path(os.environ["ENV_PREFIX"]) / "lib" / "python3.12" / "site-packages" / "foamnordic").resolve()
 for module in (foamnordic, _native):
     source = Path(module.__file__).resolve()
     if not source.is_relative_to(package):
@@ -843,9 +748,9 @@ Usage:
   update-python --editable <local-project>
   update-python --list
 
-Packages are installed with uv into a writable overlay. The Tykky base
-environment is not rebuilt. FoamNordic is updated from its Git checkout and
-its Python extension and persistent native runtime are rebuilt together.
+Packages are installed directly into the uv environment. FoamNordic uses its
+private source checkout when available and otherwise falls back to PyPI. Its
+Python extension and persistent native runtime are rebuilt together.
 USAGE
 }
 
@@ -877,60 +782,52 @@ foamnordic)
         printf 'Error: FoamNordic was not selected during installation.\n' >&2
         exit 2
     }
-    [ -d "\$FOAMNORDIC_DIR/.git" ] || {
-        printf 'Error: FoamNordic checkout not found: %s\n' "\$FOAMNORDIC_DIR" >&2
-        exit 1
-    }
-    [ -z "\$(git -C "\$FOAMNORDIC_DIR" status --porcelain)" ] || {
-        git -C "\$FOAMNORDIC_DIR" status --short
-        printf 'Error: FoamNordic checkout contains local changes.\n' >&2
-        exit 1
-    }
+    package_source=""
+    build_arguments=()
+    if [ -d "\$FOAMNORDIC_DIR/.git" ]; then
+        [ -z "\$(git -C "\$FOAMNORDIC_DIR" status --porcelain)" ] || {
+            git -C "\$FOAMNORDIC_DIR" status --short
+            printf 'Error: FoamNordic checkout contains local changes.\n' >&2
+            exit 1
+        }
+        if GIT_TERMINAL_PROMPT=0 git -C "\$FOAMNORDIC_DIR" fetch origin "$FOAMNORDIC_BRANCH"; then
+            git -C "\$FOAMNORDIC_DIR" switch "$FOAMNORDIC_BRANCH"
+            git -C "\$FOAMNORDIC_DIR" merge --ff-only "origin/$FOAMNORDIC_BRANCH"
+            package_source="\$FOAMNORDIC_DIR/packages/foamnordic"
+            build_arguments=(--source "\$FOAMNORDIC_DIR")
+        fi
+    fi
+    if [ -z "\$package_source" ]; then
+        if [ "\$MACHINE_ARCH" = "aarch64" ]; then
+            package_source='foamnordic[ml-cuda12]'
+        else
+            package_source='foamnordic[ml]'
+        fi
+        printf 'Private FoamNordic source unavailable; updating from %s.\n' "\$package_source"
+    fi
 
-    git -C "\$FOAMNORDIC_DIR" fetch origin "$FOAMNORDIC_BRANCH"
-    git -C "\$FOAMNORDIC_DIR" switch "$FOAMNORDIC_BRANCH"
-    git -C "\$FOAMNORDIC_DIR" merge --ff-only "origin/$FOAMNORDIC_BRANCH"
+    "\$UV" pip install --python "\$ENV_PREFIX/bin/python" \
+        --reinstall --no-deps "\$package_source"
 
-    native_path=""
-    while IFS= read -r path_entry; do
-        case "\$path_entry" in
-            "\$ENV_PREFIX/bin"|"\$PYTHON_OVERLAY/bin") continue ;;
-        esac
-        native_path="\${native_path:+\$native_path:}\$path_entry"
-    done < <(printf '%s' "\$PATH" | tr ':' '\n')
-
-    mkdir -p "\$PYTHON_OVERLAY"
-    PATH="\$native_path:\$ENV_PREFIX/bin" uv pip install \
-        --python "\$ENV_PREFIX/bin/python" \
-        --target "\$PYTHON_OVERLAY" \
-        --link-mode=copy \
-        --reinstall \
-        --no-deps \
-        "\$FOAMNORDIC_DIR/python"
-
-    FOAMNORDIC_NATIVE_PATH="\$native_path" "\$ENV_PREFIX/bin/python" -c '
-import os
+    "\$ENV_PREFIX/bin/python" -c '
 import sys
 
-os.environ["PATH"] = os.environ.pop("FOAMNORDIC_NATIVE_PATH")
 from foamnordic._cli import main
 
 raise SystemExit(main(sys.argv[1:]))
-' build --source "\$FOAMNORDIC_DIR"
+' build "\${build_arguments[@]}"
     "\$PYTHON_ROOT/\$MACHINE_ARCH/state/python" "\$PYTHON_ROOT/\$MACHINE_ARCH/state/check-foamnordic.py"
     "\$PYTHON_ROOT/\$MACHINE_ARCH/state/python" -c 'from foamnordic._cli import main; raise SystemExit(main(["doctor"]))'
     exit 0
     ;;
 foamnordic==*|foamnordic@*)
-    printf 'Error: use exactly "update-python foamnordic" for the source checkout.\n' >&2
+    printf 'Error: use exactly "update-python foamnordic".\n' >&2
     exit 2
     ;;
 esac
 
-mkdir -p "\$PYTHON_OVERLAY"
-
 if [ "\$1" = "--list" ]; then
-    uv pip freeze --path "\$PYTHON_OVERLAY"
+    "\$UV" pip freeze --python "\$ENV_PREFIX/bin/python"
     exit 0
 fi
 
@@ -939,23 +836,19 @@ if [ "\$1" = "--editable" ] || [ "\$1" = "-e" ]; then
         printf 'Error: --editable requires exactly one local project path.\n' >&2
         exit 2
     }
-    uv pip install \
+    "\$UV" pip install \
         --python "\$ENV_PREFIX/bin/python" \
-        --target "\$PYTHON_OVERLAY" \
-        --link-mode=copy \
         --upgrade \
         --editable "\$2"
 else
-    uv pip install \
+    "\$UV" pip install \
         --python "\$ENV_PREFIX/bin/python" \
-        --target "\$PYTHON_OVERLAY" \
-        --link-mode=copy \
         --upgrade \
         "\$@"
 fi
 
-python -m pip check
-printf 'Python overlay: %s\n' "\$PYTHON_OVERLAY"
+"\$UV" pip check --python "\$ENV_PREFIX/bin/python"
+printf 'Python environment: %s\n' "\$ENV_PREFIX"
 EOF
     chmod 750 "$HOME/bin/update-python"
 }
@@ -983,21 +876,21 @@ EOF
 
 validate_installation() {
     FOAMNORDIC_ENV_QUIET=1 source "$LOADER"
-    # A fresh Tykky image must not contain a second FoamNordic installation.
-    env -u PYTHONPATH -u PYTHON_OVERLAY -u SINGULARITYENV_PYTHONPATH -u APPTAINERENV_PYTHONPATH CSC_PYTHON_BASE_ONLY=1 "$ENV_PREFIX/bin/python" -c '
-import importlib.util
-if importlib.util.find_spec("foamnordic") is not None:
-    raise RuntimeError("FoamNordic is still present in the Tykky base; rebuild the environment")
-' || return 1
+    "$UV" pip check --python "$ENV_PREFIX/bin/python" || return 1
     if [ "$INSTALL_FOAMNORDIC" -eq 0 ]; then
-        python --version
-        python -m pip check
+        "$ENV_PREFIX/bin/python" --version
         return 0
     fi
     "$STATE_ROOT/python" "$STATE_ROOT/check-foamnordic.py" || return 1
-    env -u PYTHONPATH -u PYTHON_OVERLAY "$ENV_PREFIX/bin/python" "$STATE_ROOT/check-foamnordic.py" || return 1
     "$STATE_ROOT/python" -c 'from foamnordic._cli import main; raise SystemExit(main(["doctor"]))' || return 1
-    git -C "$FOAMNORDIC_DIR" status --short --branch
+    if [ -d "$FOAMNORDIC_DIR/.git" ]; then
+        git -C "$FOAMNORDIC_DIR" status --short --branch
+    fi
+}
+
+write_interfaces() {
+    write_loader
+    register_kernel
 }
 
 main() {
@@ -1007,19 +900,19 @@ main() {
     mkdir -p "$INSTALL_LOG_DIR"
     print_section 'Installation'
     run_step 1 "Preparing directories" prepare_directories
-    run_step 2 "Writing Tykky configuration" write_environment_files
-    run_step 3 "Building the Tykky environment" build_tykky_environment
-    run_step 4 "Preparing OpenFOAM v2512" prepare_openfoam
-    run_step 5 "Writing the environment loader" write_loader
-    run_step 6 "Installing and building FoamNordic outside Tykky" build_foamnordic
-    run_step 7 "Registering the Jupyter kernel" register_kernel
+    run_step 2 "Writing Python requirements" write_environment_files
+    run_step 3 "Installing uv" install_uv
+    run_step 4 "Building the uv Python environment" build_uv_environment
+    run_step 5 "Preparing OpenFOAM v2512" prepare_openfoam
+    run_step 6 "Installing and building FoamNordic" build_foamnordic
+    run_step 7 "Writing loaders and Jupyter kernel" write_interfaces
     run_step 8 "Validating the installation" validate_installation
 
     print_section 'Completed'
     printf 'Installation completed in %s.\n' "$(format_elapsed "$((SECONDS - started))")"
     printf 'Load with: source "%s"\n' "$LOADER"
     if [ "$INSTALL_FOAMNORDIC" -eq 1 ]; then
-        printf 'FoamNordic source: %s (%s)\n' "$FOAMNORDIC_DIR" "$FOAMNORDIC_BRANCH"
+        printf 'FoamNordic: %s\n' "$(cat "$STATE_ROOT/foamnordic-origin.txt")"
     else
         printf '%s\n' 'FoamNordic: not installed'
     fi
